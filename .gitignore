@@ -1,0 +1,10 @@
+# Каталоги
+x64/
+.vs/
+ConsoleDino/
+
+# Проектные файлы Visual Studio
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
