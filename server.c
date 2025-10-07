@@ -12,7 +12,7 @@
 #define BUFFER_SIZE 1024
 #define MAX_CLIENTS 10
 
-DWORD WINAPI ClientHandler(LPVOID lpParam) {
+DWORD __stdcall ClientHandler(LPVOID lpParam) {
     SOCKET clientSocket = (SOCKET)lpParam;
     char buffer[BUFFER_SIZE];
     int bytesReceived = BUFFER_SIZE;

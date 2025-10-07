@@ -13,8 +13,65 @@
 #pragma comment (lib, "AdvApi32.lib")
 
 
-#define DEFAULT_BUFLEN 1024
+#define BUFFER_SIZE 1024
 #define DEFAULT_PORT "27015"
+#define THREAD_COUNT 2
+#define SEND_THREAD 0
+#define RECV_THREAD 1
+
+
+// Thread functions for sending and receiving messages
+DWORD __stdcall ClientSendMessage(LPVOID lpParam) {
+	SOCKET connectSocket = (SOCKET)lpParam;
+	char sendBuffer[BUFFER_SIZE];
+
+	while (1) {
+		printf("Enter message: ");
+		if (!fgets(sendBuffer, BUFFER_SIZE, stdin))
+			break;
+
+		size_t len = strlen(sendBuffer);
+		if (len > 0 && sendBuffer[len - 1] == '\n')
+			sendBuffer[len - 1] = '\0';
+
+		if (strcmp(sendBuffer, "exit") == 0)
+			break;
+
+		if (send(connectSocket, sendBuffer, (int)strlen(sendBuffer), 0) == SOCKET_ERROR) {
+			printf("send failed: %d\n", WSAGetLastError());
+			break;
+		}
+	}
+	shutdown(connectSocket, SD_SEND);
+	return 0;
+}
+
+DWORD __stdcall ClientRecieveMessage(LPVOID lpParam) {
+	SOCKET connectSocket = (SOCKET)lpParam;
+	char receiveBuffer[BUFFER_SIZE];
+	int receiveBufferLength = BUFFER_SIZE;
+
+	while (1) {
+		int iResult = recv(connectSocket, receiveBuffer, receiveBufferLength, 0);
+		if (iResult > 0) {
+			receiveBuffer[iResult] = '\0';
+			printf("\nServer: %s\n", receiveBuffer);
+			printf("Enter message: "); // Message again
+			fflush(stdout);
+		}
+		else if (iResult == 0) {
+			printf("\nServer closed connection\n");
+			return 1;
+		}
+		else {
+			printf("\nrecv failed: %d\n", WSAGetLastError());
+			return 1;
+		}
+	}
+	shutdown(connectSocket, SD_SEND);
+	return 0;
+}
+
 
 int __cdecl main(int argc, char **argv)
 {
@@ -25,10 +82,7 @@ int __cdecl main(int argc, char **argv)
 		*ptr = NULL,
 		hints;
 
-	char sendBuffer[DEFAULT_BUFLEN];
-	char receiveBuffer[DEFAULT_BUFLEN];
-	int iResult;
-	int receiveBufferLength = DEFAULT_BUFLEN;
+	HANDLE threads[THREAD_COUNT];
 
 	// Validate the parameters
 	if (argc != 2) {
@@ -37,9 +91,8 @@ int __cdecl main(int argc, char **argv)
 	}
 
 	// Initialize Winsock
-	iResult = WSAStartup(MAKEWORD(2, 2), &wsaData);
-	if (iResult != 0) {
-		printf("WSAStartup failed with error: %d\n", iResult);
+	if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+		printf("WSAStartup failed with error: %d\n", WSAGetLastError());
 		return 1;
 	}
 
@@ -49,9 +102,8 @@ int __cdecl main(int argc, char **argv)
 	hints.ai_protocol = IPPROTO_TCP;
 
 	// Resolve the server address and port
-	iResult = getaddrinfo(argv[1], DEFAULT_PORT, &hints, &result);
-	if (iResult != 0) {
-		printf("getaddrinfo failed with error: %d\n", iResult);
+	if (getaddrinfo(argv[1], DEFAULT_PORT, &hints, &result) != 0) {
+		printf("getaddrinfo failed with error: %d\n", WSAGetLastError());
 		WSACleanup();
 		return 1;
 	}
@@ -59,8 +111,7 @@ int __cdecl main(int argc, char **argv)
 	// Attempt to connect to an address until one succeeds
 	for (ptr = result; ptr != NULL; ptr = ptr->ai_next) {
 		// Create a SOCKET for connecting to server
-		ConnectSocket = socket(ptr->ai_family, ptr->ai_socktype,
-			ptr->ai_protocol);
+		ConnectSocket = socket(ptr->ai_family, ptr->ai_socktype, ptr->ai_protocol);
 
 		if (ConnectSocket == INVALID_SOCKET) {
 			printf("Error at socket(): %ld\n", WSAGetLastError());
@@ -70,8 +121,8 @@ int __cdecl main(int argc, char **argv)
 		}
 
 		// Connect to server.
-		iResult = connect(ConnectSocket, ptr->ai_addr, (int)ptr->ai_addrlen);
-		if (iResult == SOCKET_ERROR) {
+		if (connect(ConnectSocket, ptr->ai_addr, (int)ptr->ai_addrlen) == SOCKET_ERROR) 
+		{
 			closesocket(ConnectSocket);
 			ConnectSocket = INVALID_SOCKET;
 			continue;
@@ -87,40 +138,31 @@ int __cdecl main(int argc, char **argv)
 		return 1;
 	}
 
-	while (1) {
-		printf("Enter message: ");
-		if (!fgets(sendBuffer, DEFAULT_BUFLEN, stdin))
-			break;
+	// Create threads for sending and receiving messages
+	threads[SEND_THREAD] = CreateThread(
+		NULL,
+		0,
+		ClientSendMessage,
+		(LPVOID)ConnectSocket,
+		0,
+		NULL
+	);
 
-		size_t len = strlen(sendBuffer);
-		if (len > 0 && sendBuffer[len - 1] == '\n')
-			sendBuffer[len - 1] = '\0';
-
-		if (strcmp(sendBuffer, "exit") == 0)
-			break;
-
-		iResult = send(ConnectSocket, sendBuffer, (int)strlen(sendBuffer), 0);
-		if (iResult == SOCKET_ERROR) {
-			printf("send failed: %d\n", WSAGetLastError());
-			break;
-		}
-
-		iResult = recv(ConnectSocket, receiveBuffer, receiveBufferLength, 0);
-		if (iResult > 0) {
-			receiveBuffer[iResult] = '\0';
-			printf("Server: %s\n", receiveBuffer);
-		}
-		else if (iResult == 0) {
-			printf("Server closed connection\n");
-			break;
-		}
-		else {
-			printf("recv failed: %d\n", WSAGetLastError());
-			break;
-		}
-	}
+	threads[RECV_THREAD] = CreateThread(
+		NULL,
+		0,
+		ClientRecieveMessage,
+		(LPVOID)ConnectSocket,
+		0,
+		NULL
+	);
 
 	// cleanup
+	WaitForMultipleObjects(THREAD_COUNT, threads, TRUE, INFINITE);
+
+	for (int i = 0; i < THREAD_COUNT; i++)
+		CloseHandle(threads[i]);
+
 	closesocket(ConnectSocket);
 	WSACleanup();
 
