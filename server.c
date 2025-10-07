@@ -10,7 +10,7 @@
 
 #define DEFAULT_PORT "27015"
 #define BUFFER_SIZE 1024
-#define MAX_CLIENTS 10
+#define MAX_CLIENTS 50
 #define MAX_NAME_LEN 32
 #define CODE_LENGHT 6
 
