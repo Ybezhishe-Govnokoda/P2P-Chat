@@ -1,6 +1,6 @@
 ﻿#define WIN32_LEAN_AND_MEAN
-#include <windows.h>
 
+#include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <stdio.h>
@@ -11,6 +11,10 @@
 #define DEFAULT_PORT "27015"
 #define BUFFER_SIZE 1024
 #define MAX_CLIENTS 10
+
+SOCKET clients[MAX_CLIENTS];
+int clientCount = 0;
+CRITICAL_SECTION clientsLock; // To protect access to clients array
 
 DWORD __stdcall ClientHandler(LPVOID lpParam) {
     SOCKET clientSocket = (SOCKET)lpParam;
@@ -30,11 +34,30 @@ DWORD __stdcall ClientHandler(LPVOID lpParam) {
        }
 
        buffer[bytesReceived] = '\0';
-       int sent = send(clientSocket, buffer, bytesReceived, 0);
+		 printf("Received: %s\n", buffer);
 
-       if (sent == SOCKET_ERROR) 
-          printf("send: %d\n", WSAGetLastError());
+		 // Broadcast the message to all other clients
+       EnterCriticalSection(&clientsLock);
+       for (int i = 0; i < clientCount; i++) {
+          if (clients[i] != clientSocket) {
+             int sent = send(clients[i], buffer, bytesReceived, 0);
+             if (sent == SOCKET_ERROR)
+                printf("send() failed: %d\n", WSAGetLastError());
+          }
+       }
+       LeaveCriticalSection(&clientsLock);
     }
+
+	 // Remove client from the list
+    EnterCriticalSection(&clientsLock);
+    for (int i = 0; i < clientCount; i++) {
+       if (clients[i] == clientSocket) {
+          clients[i] = clients[clientCount - 1];
+          clientCount--;
+          break;
+       }
+    }
+    LeaveCriticalSection(&clientsLock);
 
     closesocket(clientSocket);
     return 0;
@@ -51,7 +74,8 @@ int __cdecl main(void)
    struct addrinfo *result = NULL, hints;
 
    HANDLE threads[MAX_CLIENTS];
-   int clientCount = 0;
+
+   InitializeCriticalSection(&clientsLock);
 
    // Initialize Winsock
    if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
@@ -108,29 +132,33 @@ int __cdecl main(void)
 
    // Processing receiving and sending messages 
    // to the server with multithreading
-   while (clientCount < MAX_CLIENTS) {
+   while (1) {
       ClientSocket = accept(ServerSocket, NULL, NULL);
-
       if (ClientSocket == INVALID_SOCKET) {
-         printf("Accept failed.\n");
+         printf("accept() failed: %d\n", WSAGetLastError());
          continue;
       }
 
-      threads[clientCount] = CreateThread(
-         NULL,
-         0,
-         ClientHandler,
-         (LPVOID)ClientSocket,
-         0,
-         NULL
-      );
+      EnterCriticalSection(&clientsLock);
+      if (clientCount < MAX_CLIENTS) {
+         clients[clientCount++] = ClientSocket;
+         LeaveCriticalSection(&clientsLock);
 
-      if (threads[clientCount] == NULL) {
-         printf("Thread creation failed.\n");
-         closesocket(ClientSocket);
+         threads[clientCount - 1] = CreateThread(
+            NULL, 
+            0, 
+            ClientHandler, 
+            (LPVOID)ClientSocket, 
+            0, 
+            NULL
+         );
+
+         printf("Client connected! Total: %d\n", clientCount);
       }
       else {
-         clientCount++;
+         LeaveCriticalSection(&clientsLock);
+         printf("Server full, closing new connection.\n");
+         closesocket(ClientSocket);
       }
    }
 

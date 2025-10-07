@@ -56,7 +56,6 @@ DWORD __stdcall ClientRecieveMessage(LPVOID lpParam) {
 		if (iResult > 0) {
 			receiveBuffer[iResult] = '\0';
 			printf("\nServer: %s\n", receiveBuffer);
-			printf("Enter message: "); // Message again
 			fflush(stdout);
 		}
 		else if (iResult == 0) {

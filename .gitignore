@@ -8,3 +8,6 @@ ConsoleDino/
 *.vcxproj
 *.vcxproj.filters
 *.vcxproj.user
+
+# Исполняемые файлы
+*.exe
