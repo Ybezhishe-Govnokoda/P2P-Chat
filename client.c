@@ -18,6 +18,7 @@
 #define THREAD_COUNT 2
 #define SEND_THREAD 0
 #define RECV_THREAD 1
+#define MAX_NAME_LEN 32
 
 
 // Thread functions for sending and receiving messages
@@ -26,7 +27,6 @@ DWORD __stdcall ClientSendMessage(LPVOID lpParam) {
 	char sendBuffer[BUFFER_SIZE];
 
 	while (1) {
-		printf("Enter message: ");
 		if (!fgets(sendBuffer, BUFFER_SIZE, stdin))
 			break;
 
@@ -34,13 +34,16 @@ DWORD __stdcall ClientSendMessage(LPVOID lpParam) {
 		if (len > 0 && sendBuffer[len - 1] == '\n')
 			sendBuffer[len - 1] = '\0';
 
-		if (strcmp(sendBuffer, "exit") == 0)
+		if (strcmp(sendBuffer, "exit") == 0) {
+			shutdown(connectSocket, SD_SEND);
 			break;
+		}
 
 		if (send(connectSocket, sendBuffer, (int)strlen(sendBuffer), 0) == SOCKET_ERROR) {
 			printf("send failed: %d\n", WSAGetLastError());
 			break;
 		}
+		
 	}
 	shutdown(connectSocket, SD_SEND);
 	return 0;
@@ -55,7 +58,7 @@ DWORD __stdcall ClientRecieveMessage(LPVOID lpParam) {
 		int iResult = recv(connectSocket, receiveBuffer, receiveBufferLength, 0);
 		if (iResult > 0) {
 			receiveBuffer[iResult] = '\0';
-			printf("\nServer: %s\n", receiveBuffer);
+			printf("%s\n", receiveBuffer);
 			fflush(stdout);
 		}
 		else if (iResult == 0) {
@@ -82,6 +85,8 @@ int __cdecl main(int argc, char **argv)
 		hints;
 
 	HANDLE threads[THREAD_COUNT];
+
+	char userName[MAX_NAME_LEN];
 
 	// Validate the parameters
 	if (argc != 2) {
@@ -136,6 +141,35 @@ int __cdecl main(int argc, char **argv)
 		WSACleanup();
 		return 1;
 	}
+
+	printf("Enter name(16 characters max): ");
+	while (1) {
+		if (fgets(userName, MAX_NAME_LEN, stdin)) {
+			size_t len = strlen(userName);
+			if (len > 0 && userName[len - 1] == '\n')
+				userName[len - 1] = '\0'; // Убираем \n
+
+			if (strlen(userName) <= 16) {
+				// Add prefix [NAME]
+				char prefix[] = "[NAME]";
+				size_t len_prefix = strlen(prefix);
+				len = strlen(userName);
+
+				memmove(userName + len_prefix, userName, len + 1);
+				memcpy(userName, prefix, len_prefix);
+				break;
+			}
+			else printf("Failed to get name. Try again: \n");
+		}
+	}
+
+	// Send the name to server
+	if (send(ConnectSocket, userName, (int)strlen(userName), 0) == SOCKET_ERROR)
+		printf("send failed: %d\n", WSAGetLastError());
+
+	Sleep(100); // Little delay so server can process the name
+
+	printf("\nConnected to server. Type messages to send. Type 'exit' to quit.\n");
 
 	// Create threads for sending and receiving messages
 	threads[SEND_THREAD] = CreateThread(

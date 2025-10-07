@@ -11,56 +11,84 @@
 #define DEFAULT_PORT "27015"
 #define BUFFER_SIZE 1024
 #define MAX_CLIENTS 10
+#define MAX_NAME_LEN 32
+#define CODE_LENGHT 6
 
-SOCKET clients[MAX_CLIENTS];
+typedef struct {
+    SOCKET socket;
+	 char name[MAX_NAME_LEN];
+} Client;
+
+Client clients[MAX_CLIENTS];
 int clientCount = 0;
 CRITICAL_SECTION clientsLock; // To protect access to clients array
 
 DWORD __stdcall ClientHandler(LPVOID lpParam) {
-    SOCKET clientSocket = (SOCKET)lpParam;
-    char buffer[BUFFER_SIZE];
-    int bytesReceived = BUFFER_SIZE;
+   SOCKET clientSocket = (SOCKET)lpParam;
+   char buffer[BUFFER_SIZE];
+   int bytesReceived;
 
-    while ((bytesReceived = recv(clientSocket, buffer, BUFFER_SIZE, 0)) > 0) {
-       if (bytesReceived == 0) {
-          printf("Client disconnected\n");
-          shutdown(clientSocket, SD_BOTH);
-          closesocket(clientSocket);
-       }
-       else if (bytesReceived == SOCKET_ERROR) {
-          printf("recv failed: %d\n", WSAGetLastError());
-          shutdown(clientSocket, SD_BOTH);
-          closesocket(clientSocket);
-       }
+   while ((bytesReceived = recv(clientSocket, buffer, BUFFER_SIZE - 1, 0)) > 0) {
+      buffer[bytesReceived] = '\0';
 
-       buffer[bytesReceived] = '\0';
-		 printf("Received: %s\n", buffer);
+		// Check if the message is a name setting command
+      if (strncmp(buffer, "[NAME]", CODE_LENGHT) == 0) {
+         EnterCriticalSection(&clientsLock);
+         for (int i = 0; i < clientCount; i++) {
+            if (clients[i].socket == clientSocket) {
+               strncpy(clients[i].name, buffer + 6, MAX_NAME_LEN - 1);
+               clients[i].name[MAX_NAME_LEN - 1] = '\0';
+               printf("Client set name: %s\n", clients[i].name);
+               break;
+            }
+         }
+         LeaveCriticalSection(&clientsLock);
+			continue; // Skip broadcasting this message
+      }
 
-		 // Broadcast the message to all other clients
-       EnterCriticalSection(&clientsLock);
-       for (int i = 0; i < clientCount; i++) {
-          if (clients[i] != clientSocket) {
-             int sent = send(clients[i], buffer, bytesReceived, 0);
-             if (sent == SOCKET_ERROR)
-                printf("send() failed: %d\n", WSAGetLastError());
-          }
-       }
-       LeaveCriticalSection(&clientsLock);
-    }
+		// Find sender's name
+      char senderName[MAX_NAME_LEN] = "Unknown";
+      EnterCriticalSection(&clientsLock);
+      for (int i = 0; i < clientCount; i++) {
+         if (clients[i].socket == clientSocket) {
+            strncpy(senderName, clients[i].name, MAX_NAME_LEN);
+            break;
+         }
+      }
+      LeaveCriticalSection(&clientsLock);
 
-	 // Remove client from the list
-    EnterCriticalSection(&clientsLock);
-    for (int i = 0; i < clientCount; i++) {
-       if (clients[i] == clientSocket) {
-          clients[i] = clients[clientCount - 1];
-          clientCount--;
-          break;
-       }
-    }
-    LeaveCriticalSection(&clientsLock);
+      printf("[%s]: %s\n", senderName, buffer);
 
-    closesocket(clientSocket);
-    return 0;
+		// Broadcast the message to other clients
+      char messageWithName[BUFFER_SIZE + MAX_NAME_LEN + 3];
+      snprintf(messageWithName, sizeof(messageWithName), "%s: %s", senderName, buffer);
+
+      EnterCriticalSection(&clientsLock);
+      for (int i = 0; i < clientCount; i++) {
+         if (clients[i].socket != clientSocket) {
+            int sent = send(clients[i].socket, messageWithName, (int)strlen(messageWithName), 0);
+            if (sent == SOCKET_ERROR) {
+               printf("send() failed: %d\n", WSAGetLastError());
+            }
+         }
+      }
+      LeaveCriticalSection(&clientsLock);
+   }
+
+	// Remove client from the list upon disconnection
+   EnterCriticalSection(&clientsLock);
+   for (int i = 0; i < clientCount; i++) {
+      if (clients[i].socket == clientSocket) {
+         printf("Client %s disconnected\n", clients[i].name);
+         clients[i] = clients[clientCount - 1];
+         clientCount--;
+         break;
+      }
+   }
+   LeaveCriticalSection(&clientsLock);
+
+   closesocket(clientSocket);
+   return 0;
 }
 
 
@@ -141,7 +169,7 @@ int __cdecl main(void)
 
       EnterCriticalSection(&clientsLock);
       if (clientCount < MAX_CLIENTS) {
-         clients[clientCount++] = ClientSocket;
+         clients[clientCount++].socket = ClientSocket;
          LeaveCriticalSection(&clientsLock);
 
          threads[clientCount - 1] = CreateThread(
