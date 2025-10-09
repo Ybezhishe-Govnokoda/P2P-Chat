@@ -9,5 +9,6 @@ ConsoleDino/
 *.vcxproj.filters
 *.vcxproj.user
 
-# Исполняемые файлы
+# Файлы после компиляции
 *.exe
+*.obj

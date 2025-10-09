@@ -4,6 +4,7 @@
 #include <winsock2.h>
 #include <ws2tcpip.h>
 #include <stdio.h>
+#include <locale.h>
 
 // Necessary for linking with ws2_32.lib
 #pragma comment(lib, "ws2_32.lib")
@@ -13,6 +14,7 @@
 #define MAX_CLIENTS 50
 #define MAX_NAME_LEN 32
 #define CODE_LENGHT 6
+
 
 typedef struct {
     SOCKET socket;
@@ -61,7 +63,7 @@ DWORD __stdcall ClientHandler(LPVOID lpParam) {
 
 		// Broadcast the message to other clients
       char messageWithName[BUFFER_SIZE + MAX_NAME_LEN + 3];
-      snprintf(messageWithName, sizeof(messageWithName), "%s: %s", senderName, buffer);
+      snprintf(messageWithName, sizeof(messageWithName), "\x1B[32m%s:\033[0m %s", senderName, buffer);
 
       EnterCriticalSection(&clientsLock);
       for (int i = 0; i < clientCount; i++) {

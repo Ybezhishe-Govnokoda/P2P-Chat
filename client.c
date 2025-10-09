@@ -21,6 +21,18 @@
 #define MAX_NAME_LEN 32
 
 
+// Enable Virtual Terminal Processing for colored output
+inline void EnableVTMode() {
+	HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
+	if (hOut == INVALID_HANDLE_VALUE) return;
+
+	DWORD dwMode = 0;
+	if (!GetConsoleMode(hOut, &dwMode)) return;
+
+	dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
+	SetConsoleMode(hOut, dwMode);
+}
+
 // Thread functions for sending and receiving messages
 DWORD __stdcall ClientSendMessage(LPVOID lpParam) {
 	SOCKET connectSocket = (SOCKET)lpParam;
@@ -87,6 +99,9 @@ int __cdecl main(int argc, char **argv)
 	HANDLE threads[THREAD_COUNT];
 
 	char userName[MAX_NAME_LEN];
+
+
+	EnableVTMode();
 
 	// Validate the parameters
 	if (argc != 2) {
