@@ -1,7 +1,7 @@
 # Каталоги
 x64/
 .vs/
-ConsoleDino/
+P2P_chat/
 
 # Проектные файлы Visual Studio
 *.sln
@@ -12,3 +12,8 @@ ConsoleDino/
 # Файлы после компиляции
 *.exe
 *.obj
+*.exp
+*.lib
+
+#Files with keys
+*.pem
