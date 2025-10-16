@@ -8,13 +8,11 @@
 #include <stdio.h>
 #include <string.h>
 
-#include <openssl/evp.h>
-#include <openssl/pem.h>
-#include <openssl/bio.h>
-#include <openssl/buffer.h>
-#include <openssl/rand.h>
-#include <openssl/err.h>
 #include "openssl\applink.c"
+
+
+#include "msg_parser.h"
+#include "msg_encryption.h"
 
 
 // Need to link with Ws2_32.lib, Mswsock.lib, and Advapi32.lib
@@ -47,70 +45,6 @@ inline void EnableVTMode() {
 	SetConsoleMode(hOut, dwMode);
 }
 
-// ---------- utility: base64 encode ----------
-char *base64_encode(const unsigned char *input, int length) {
-	BIO *bmem = NULL, *b64 = NULL;
-	BUF_MEM *bptr;
-	char *buff = NULL;
-
-	b64 = BIO_new(BIO_f_base64());
-	BIO_set_flags(b64, BIO_FLAGS_BASE64_NO_NL); // no newlines
-	bmem = BIO_new(BIO_s_mem());
-	b64 = BIO_push(b64, bmem);
-
-	BIO_write(b64, input, length);
-	BIO_flush(b64);
-	BIO_get_mem_ptr(b64, &bptr);
-
-	buff = (char *)malloc(bptr->length + 1);
-	if (!buff) { BIO_free_all(b64); return NULL; }
-	memcpy(buff, bptr->data, bptr->length);
-	buff[bptr->length] = '\0';
-
-	BIO_free_all(b64);
-	return buff; // caller must free
-}
-
-// ---------- load public key as EVP_PKEY ----------
-EVP_PKEY *load_public_key_evp(const char *filename) {
-	FILE *fp = fopen(filename, "rb");
-	if (!fp) { perror("open pubkey"); return NULL; }
-	EVP_PKEY *pkey = PEM_read_PUBKEY(fp, NULL, NULL, NULL);
-	fclose(fp);
-	return pkey;
-}
-
-// ---------- AES-GCM encrypt in-place (EVP). Returns ciphertext_len or -1 on error ----------
-int aes_gcm_encrypt_inplace(unsigned char *buffer, int buf_len,
-	const unsigned char *key,
-	const unsigned char *iv, int iv_len,
-	unsigned char *tag_out)
-{
-	EVP_CIPHER_CTX *ctx = NULL;
-	int len = 0, outlen = 0;
-	int ret = -1;
-
-	ctx = EVP_CIPHER_CTX_new();
-	if (!ctx) return -1;
-
-	if (1 != EVP_EncryptInit_ex(ctx, EVP_aes_128_gcm(), NULL, NULL, NULL)) goto done;
-	if (1 != EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_SET_IVLEN, iv_len, NULL)) goto done;
-	if (1 != EVP_EncryptInit_ex(ctx, NULL, NULL, key, iv)) goto done;
-
-	if (1 != EVP_EncryptUpdate(ctx, buffer, &len, buffer, buf_len)) goto done;
-	outlen = len;
-
-	if (1 != EVP_EncryptFinal_ex(ctx, buffer + len, &len)) goto done;
-	outlen += len;
-
-	if (1 != EVP_CIPHER_CTX_ctrl(ctx, EVP_CTRL_GCM_GET_TAG, TAG_LEN, tag_out)) goto done;
-
-	ret = outlen;
-
-done:
-	EVP_CIPHER_CTX_free(ctx);
-	return ret;
-}
 
 // ---------- client send thread ----------
 DWORD __stdcall ClientSendMessage(LPVOID lpParam) {
@@ -158,7 +92,7 @@ DWORD __stdcall ClientSendMessage(LPVOID lpParam) {
 		}
 
 		// Load server public key (EVP)
-		EVP_PKEY *pub = load_public_key_evp("server_pub.pem");
+		EVP_PKEY *pub = load_public_key("server_pub.pem");
 		if (!pub) { 
 			fprintf(stderr, "load_public_key_evp failed\n"); 
 			free(ciphertext_buf); 
@@ -174,7 +108,7 @@ DWORD __stdcall ClientSendMessage(LPVOID lpParam) {
 			break; 
 		}
 		// Initialize for encryption
-		if (EVP_PKEY_encrypt_init(pctx) <= 0) { 
+		if (EVP_PKEY_encrypt_init(pctx) <= 0) {
 			fprintf(stderr, "encrypt_init failed\n"); 
 			EVP_PKEY_CTX_free(pctx); 
 			EVP_PKEY_free(pub); 
@@ -371,7 +305,7 @@ int __cdecl main(int argc, char **argv)
 		if (fgets(userName, MAX_NAME_LEN, stdin)) {
 			size_t len = strlen(userName);
 			if (len > 0 && userName[len - 1] == '\n')
-				userName[len - 1] = '\0'; // Убираем \n
+				userName[len - 1] = '\0'; // Remove \n
 
 			if (strlen(userName) <= 16) {
 				// Add prefix [NAME]
