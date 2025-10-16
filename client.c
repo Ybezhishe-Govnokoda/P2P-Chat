@@ -75,19 +75,9 @@ DWORD __stdcall ClientSendMessage(LPVOID lpParam) {
 			break;
 		}
 
-		// Copy plaintext into a binary buffer for in-place encryption
-		// Use a buffer large enough: ciphertext_len == plain_len for GCM
-		unsigned char *ciphertext_buf = (unsigned char *)malloc(plain_len + 1); // +1 for safety when null-terminating later
-		if (!ciphertext_buf) { 
-			fprintf(stderr, "malloc failed\n"); 
-			break; 
-		}
-		memcpy(ciphertext_buf, buffer, plain_len);
-
-		int ciphertext_len = aes_gcm_encrypt_inplace(ciphertext_buf, (int)plain_len, aes_key, iv, IV_LEN, tag);
+		int ciphertext_len = aes_gcm_encrypt_inplace(buffer, (int)plain_len, aes_key, iv, IV_LEN, tag);
 		if (ciphertext_len < 0) {
 			fprintf(stderr, "AES-GCM encrypt failed\n");
-			free(ciphertext_buf);
 			break;
 		}
 
@@ -95,7 +85,6 @@ DWORD __stdcall ClientSendMessage(LPVOID lpParam) {
 		EVP_PKEY *pub = load_public_key("server_pub.pem");
 		if (!pub) { 
 			fprintf(stderr, "load_public_key_evp failed\n"); 
-			free(ciphertext_buf); 
 			break; 
 		}
 
@@ -104,7 +93,6 @@ DWORD __stdcall ClientSendMessage(LPVOID lpParam) {
 		if (!pctx) { 
 			fprintf(stderr, "EVP_PKEY_CTX_new failed\n"); 
 			EVP_PKEY_free(pub); 
-			free(ciphertext_buf);
 			break; 
 		}
 		// Initialize for encryption
@@ -112,7 +100,6 @@ DWORD __stdcall ClientSendMessage(LPVOID lpParam) {
 			fprintf(stderr, "encrypt_init failed\n"); 
 			EVP_PKEY_CTX_free(pctx); 
 			EVP_PKEY_free(pub); 
-			free(ciphertext_buf); 
 			break; 
 		}
 		// set RSA OAEP padding
@@ -120,7 +107,6 @@ DWORD __stdcall ClientSendMessage(LPVOID lpParam) {
 			fprintf(stderr, "set padding failed\n"); 
 			EVP_PKEY_CTX_free(pctx); 
 			EVP_PKEY_free(pub); 
-			free(ciphertext_buf);
 			break; 
 		}
 
@@ -130,7 +116,6 @@ DWORD __stdcall ClientSendMessage(LPVOID lpParam) {
 			fprintf(stderr, "get outlen failed\n"); 
 			EVP_PKEY_CTX_free(pctx); 
 			EVP_PKEY_free(pub); 
-			free(ciphertext_buf);
 			break; 
 		}
 
@@ -139,7 +124,6 @@ DWORD __stdcall ClientSendMessage(LPVOID lpParam) {
 			fprintf(stderr, "malloc enc_key failed\n"); 
 			EVP_PKEY_CTX_free(pctx); 
 			EVP_PKEY_free(pub); 
-			free(ciphertext_buf); 
 			break; 
 		}
 		if (EVP_PKEY_encrypt(pctx, enc_key, &enc_key_len, aes_key, sizeof(aes_key)) <= 0) {
@@ -147,7 +131,6 @@ DWORD __stdcall ClientSendMessage(LPVOID lpParam) {
 			EVP_PKEY_CTX_free(pctx); 
 			EVP_PKEY_free(pub); 
 			free(enc_key); 
-			free(ciphertext_buf); 
 			break;
 		}
 		EVP_PKEY_CTX_free(pctx);
@@ -157,11 +140,11 @@ DWORD __stdcall ClientSendMessage(LPVOID lpParam) {
 		char *b64_enc_key = base64_encode(enc_key, (int)enc_key_len);
 		char *b64_iv = base64_encode(iv, IV_LEN);
 		char *b64_tag = base64_encode(tag, TAG_LEN);
-		char *b64_ct = base64_encode(ciphertext_buf, ciphertext_len);
+		char *b64_ct = base64_encode(buffer, ciphertext_len);
 
 		if (!b64_enc_key || !b64_iv || !b64_tag || !b64_ct) {
 			fprintf(stderr, "base64 encode failed\n");
-			free(enc_key); free(ciphertext_buf);
+			free(enc_key);
 			if (b64_enc_key) free(b64_enc_key);
 			if (b64_iv) free(b64_iv);
 			if (b64_tag) free(b64_tag);
@@ -174,7 +157,7 @@ DWORD __stdcall ClientSendMessage(LPVOID lpParam) {
 		char *final_msg = (char *)malloc(6 + strlen(b64_enc_key) + strlen(b64_iv) + strlen(b64_tag) + strlen(b64_ct) + 64);
 		if (!final_msg) { 
 			fprintf(stderr, "malloc final_msg failed\n"); 
-			free(enc_key); free(ciphertext_buf); 
+			free(enc_key);
 			free(b64_enc_key); free(b64_iv); 
 			free(b64_tag); free(b64_ct); 
 			break; 
@@ -193,7 +176,6 @@ DWORD __stdcall ClientSendMessage(LPVOID lpParam) {
 
 		// Cleanup
 		free(enc_key);
-		free(ciphertext_buf);
 		free(b64_enc_key);
 		free(b64_iv);
 		free(b64_tag);

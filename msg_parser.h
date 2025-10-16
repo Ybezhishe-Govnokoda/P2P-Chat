@@ -5,7 +5,6 @@
 #include <openssl/evp.h>
 #include <openssl/buffer.h>
 #include <openssl/rand.h>
-//#include "openssl/applink.c"
 
 
 // Error codes for message parsing

@@ -5,7 +5,7 @@
 #include <openssl/bio.h>
 #include <openssl/buffer.h>
 #include <openssl/rand.h>
-//#include "openssl/applink.c"
+
 
 #define TAG_LEN 16
 #define AES_KEY_LEN 16

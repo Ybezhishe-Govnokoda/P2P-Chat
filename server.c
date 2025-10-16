@@ -77,14 +77,16 @@ DWORD __stdcall ClientHandler(LPVOID lpParam) {
       unsigned char *enc_key_bin = NULL, *iv_bin = NULL, *tag_bin = NULL, *ct_bin = NULL;
       int enc_key_bin_len = 0, iv_len = 0, tag_len = 0, ct_len = 0;
 
-      if (parse_message_base64(recvbuf,
+      int err_code = parse_message_base64(recvbuf,
          &enc_key_len,
          &enc_key_bin, &enc_key_bin_len,
          &iv_bin, &iv_len,
          &tag_bin, &tag_len,
-         &ct_bin, &ct_len) != PARSE_OK) {
+         &ct_bin, &ct_len);
+      if (err_code != PARSE_OK) {
 
          printf("Failed to parse message from client.\n");
+         printf("%d", err_code);
          // free if any allocated
          CLEANUP;
          continue;
@@ -110,6 +112,7 @@ DWORD __stdcall ClientHandler(LPVOID lpParam) {
       if (pt_len < 0) {
          printf("AES-GCM decryption failed (auth fail)\n");
          CLEANUP;
+         continue;
       }
 
       // Ensure null-termination for text usage
