@@ -112,30 +112,34 @@ const unsigned char *AES_key_decrypt(
    EVP_PKEY *g_server_privkey,
 	const unsigned char *enc_key_bin,
 	int enc_key_bin_len
-   ) {
+   ) 
+{
+   if (!g_server_privkey || !enc_key_bin || enc_key_bin_len <= 0) return NULL;
 
    unsigned char *aes_key = NULL;
    size_t outlen = 0;
    EVP_PKEY_CTX *pctx = EVP_PKEY_CTX_new(g_server_privkey, NULL);
+   short ok = 0;
 
    if (!pctx) {
       printf("EVP_PKEY_CTX_new failed\n");
+      goto cleanup;
    }
 
    if (EVP_PKEY_decrypt_init(pctx) <= 0) {
-      EVP_PKEY_CTX_free(pctx);
       printf("decrypt_init failed\n");
+      goto cleanup;
    }
    // set RSA OAEP padding
    if (EVP_PKEY_CTX_set_rsa_padding(pctx, RSA_PKCS1_OAEP_PADDING) <= 0) {
-      EVP_PKEY_CTX_free(pctx);
       printf("set padding failed\n");
+      goto cleanup;
    }
 
    // First call to get required size
    if (EVP_PKEY_decrypt(pctx, NULL, &outlen, enc_key_bin, (size_t)enc_key_bin_len) <= 0) {
       printf("EVP_PKEY_decrypt(get size) failed\n");
-      EVP_PKEY_CTX_free(pctx);
+      goto cleanup;
    }
 
    aes_key = (unsigned char *)malloc(outlen);
@@ -144,18 +148,22 @@ const unsigned char *AES_key_decrypt(
    // Second call to do decryption
    if (EVP_PKEY_decrypt(pctx, aes_key, &outlen, enc_key_bin, (size_t)enc_key_bin_len) <= 0) {
       printf("EVP_PKEY_decrypt failed\n");
-      free(aes_key);
-      aes_key = NULL;
-      EVP_PKEY_CTX_free(pctx);
+      goto cleanup;
    }
-   EVP_PKEY_CTX_free(pctx);
 
    // Check decrypted key length
    if (outlen != AES_KEY_LEN) {
       printf("Decrypted key length mismatch %zu\n", outlen);
-      OPENSSL_cleanse(aes_key, outlen);
-      free(aes_key);
+      goto cleanup;
    }
+   ok = 1;
 
-	return aes_key ? aes_key : NULL;
+cleanup:
+   if (pctx) EVP_PKEY_CTX_free(pctx);
+   if (!ok && aes_key) { 
+      OPENSSL_cleanse(aes_key, AES_KEY_LEN); 
+      free(aes_key); 
+      aes_key = NULL; 
+   }
+	return aes_key; // Caller must free
 }

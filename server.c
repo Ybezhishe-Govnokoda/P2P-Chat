@@ -115,6 +115,9 @@ DWORD __stdcall ClientHandler(LPVOID lpParam) {
          continue;
       }
 
+      if (aes_key) { free(aes_key); }
+
+
       // Ensure null-termination for text usage
       int printable_len = pt_len;
       if (printable_len >= BUFFER_SIZE - 1) printable_len = BUFFER_SIZE - 2;
@@ -253,8 +256,9 @@ int __cdecl main(void)
             0, 
             NULL
          );
+         if (!threads[clientCount - 1]) { clientCount--; }
+         else printf("Client connected! Total: %d\n", clientCount);
 
-         printf("Client connected! Total: %d\n", clientCount);
       }
       else {
          LeaveCriticalSection(&clientsLock);
