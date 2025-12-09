@@ -4,14 +4,10 @@
 #include <windows.h>
 #include <winsock2.h>
 #include <ws2tcpip.h>
-#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
 #include "openssl\applink.c"
-
-
-#include "msg_parser.h"
 #include "msg_encryption.h"
 
 
@@ -28,186 +24,240 @@
 #define RECV_THREAD 1
 #define MAX_NAME_LEN 32
 
-#define AES_KEY_LEN 16
 #define IV_LEN 12
 #define TAG_LEN 16
 
 
+typedef enum {
+	SUCCESS = 0,
+	GENERATE_KEY_FAIL = -1,
+	BASE64_ENCODE_FAIL = -2,
+	SEND_FAIL = -3,
+} client_state;
+
+
 // Enable Virtual Terminal Processing for colored output
-inline void EnableVTMode() {
-	HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);
-	if (hOut == INVALID_HANDLE_VALUE) return;
+#define EnableVTMode() do {                         \
+	HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);   \
+	if (hOut == INVALID_HANDLE_VALUE) return;        \
+                                                    \
+	DWORD dwMode = 0;                                \
+	if (!GetConsoleMode(hOut, &dwMode)) return;      \
+                                                    \
+	dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;    \
+	SetConsoleMode(hOut, dwMode);                    \
+} while (0);
 
-	DWORD dwMode = 0;
-	if (!GetConsoleMode(hOut, &dwMode)) return;
 
-	dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;
-	SetConsoleMode(hOut, dwMode);
+// -----------------------------------------
+// GENERATE SENDER KEY (Group Key)
+// -----------------------------------------
+int generate_group_key(unsigned char *group_key_out) {
+	if (RAND_bytes(group_key_out, SENDER_KEY_LEN) != 1) {
+		fprintf(stderr, "RAND_bytes failed generating group key\n");
+		return GENERATE_KEY_FAIL;
+	}
+	return SUCCESS;
+}
+
+// -----------------------------------------
+// Encode and send group key to server
+// -----------------------------------------
+int send_group_key(SOCKET sock, const unsigned char *group_key) {
+	// Base64 encode the AES key
+	char *b64 = base64_encode(group_key, SENDER_KEY_LEN);
+	if (!b64) {
+		fprintf(stderr, "base64 encode group key failed\n");
+		return BASE64_ENCODE_FAIL;
+	}
+
+	// Format packet: [GKEY][base64_key]
+	char msg[256];
+	snprintf(msg, sizeof(msg), "[GKEY][%s]", b64);
+
+	free(b64);
+
+	if (send(sock, msg, (int)strlen(msg), 0) <= 0) {
+		fprintf(stderr, "send group key failed\n");
+		return SEND_FAIL;
+	}
+
+	return SUCCESS;
 }
 
 
 // ---------- client send thread ----------
 DWORD __stdcall ClientSendMessage(LPVOID lpParam) {
-	SOCKET connectSocket = (SOCKET)(uintptr_t)lpParam;
+	SOCKET sock = (SOCKET)(uintptr_t)lpParam;
 	char buffer[BUFFER_SIZE];
-	unsigned char aes_key[AES_KEY_LEN];
+
 	unsigned char iv[IV_LEN];
 	unsigned char tag[TAG_LEN];
 
 	while (1) {
-		// Read line
-		if (!fgets(buffer, sizeof(buffer), stdin)) break;
+
+		// Read input from user
+		if (!fgets(buffer, sizeof(buffer), stdin))
+			break;
+
+		// Remove trailing newline
 		size_t plain_len = strlen(buffer);
-		if (plain_len > 0 && buffer[plain_len - 1] == '\n') { 
-			buffer[plain_len - 1] = '\0'; 
-			plain_len--; 
+		if (plain_len > 0 && buffer[plain_len - 1] == '\n') {
+			buffer[plain_len - 1] = '\0';
+			plain_len--;
 		}
 
-		if (plain_len == 0) continue;
+		// Check for exit command
 		if (strcmp(buffer, "exit") == 0) {
-			shutdown(connectSocket, SD_SEND);
+			shutdown(sock, SD_SEND);
 			break;
 		}
 
-		// Generate AES key + IV
-		if (RAND_bytes(aes_key, sizeof(aes_key)) != 1 || RAND_bytes(iv, sizeof(iv)) != 1) {
-			fprintf(stderr, "RAND_bytes failed\n");
+
+		if (!group_key_set) {
+			printf("Cannot send: group key not received yet.\n");
+			continue;
+		}
+
+		// Make IV
+		if (RAND_bytes(iv, IV_LEN) != 1) {
+			fprintf(stderr, "RAND_bytes(iv) failed\n");
 			break;
 		}
 
-		int ciphertext_len = aes_gcm_encrypt_inplace(buffer, (int)plain_len, aes_key, iv, IV_LEN, tag);
+		// Encrypt message in-place
+		int ciphertext_len =
+			aes256_gcm_encrypt(
+				(unsigned char *)buffer,
+				(int)plain_len,
+				group_key,
+				iv, tag);
+
 		if (ciphertext_len < 0) {
 			fprintf(stderr, "AES-GCM encrypt failed\n");
 			break;
 		}
 
-		// Load server public key (EVP)
-		EVP_PKEY *pub = load_public_key("server_pub.pem");
-		if (!pub) { 
-			fprintf(stderr, "load_public_key_evp failed\n"); 
-			break; 
-		}
-
-		// Encrypt AES key with server public key (EVP_PKEY_encrypt)
-		EVP_PKEY_CTX *pctx = EVP_PKEY_CTX_new(pub, NULL);
-		if (!pctx) { 
-			fprintf(stderr, "EVP_PKEY_CTX_new failed\n"); 
-			EVP_PKEY_free(pub); 
-			break; 
-		}
-		// Initialize for encryption
-		if (EVP_PKEY_encrypt_init(pctx) <= 0) {
-			fprintf(stderr, "encrypt_init failed\n"); 
-			EVP_PKEY_CTX_free(pctx); 
-			EVP_PKEY_free(pub); 
-			break; 
-		}
-		// set RSA OAEP padding
-		if (EVP_PKEY_CTX_set_rsa_padding(pctx, RSA_PKCS1_OAEP_PADDING) <= 0) { 
-			fprintf(stderr, "set padding failed\n"); 
-			EVP_PKEY_CTX_free(pctx); 
-			EVP_PKEY_free(pub); 
-			break; 
-		}
-
-		// First call to get required size
-		size_t enc_key_len = 0;
-		if (EVP_PKEY_encrypt(pctx, NULL, &enc_key_len, aes_key, sizeof(aes_key)) <= 0) { 
-			fprintf(stderr, "get outlen failed\n"); 
-			EVP_PKEY_CTX_free(pctx); 
-			EVP_PKEY_free(pub); 
-			break; 
-		}
-
-		unsigned char *enc_key = malloc(enc_key_len);
-		if (!enc_key) { 
-			fprintf(stderr, "malloc enc_key failed\n"); 
-			EVP_PKEY_CTX_free(pctx); 
-			EVP_PKEY_free(pub); 
-			break; 
-		}
-		if (EVP_PKEY_encrypt(pctx, enc_key, &enc_key_len, aes_key, sizeof(aes_key)) <= 0) {
-			fprintf(stderr, "EVP_PKEY_encrypt failed\n"); 
-			EVP_PKEY_CTX_free(pctx); 
-			EVP_PKEY_free(pub); 
-			free(enc_key); 
-			break;
-		}
-		EVP_PKEY_CTX_free(pctx);
-		EVP_PKEY_free(pub);
-
-		// Base64-encode binary parts: enc_key, iv, tag, ciphertext
-		char *b64_enc_key = base64_encode(enc_key, (int)enc_key_len);
+		// Base64 encode parts
 		char *b64_iv = base64_encode(iv, IV_LEN);
 		char *b64_tag = base64_encode(tag, TAG_LEN);
-		char *b64_ct = base64_encode(buffer, ciphertext_len);
+		char *b64_ct = base64_encode((unsigned char *)buffer, ciphertext_len);
 
-		if (!b64_enc_key || !b64_iv || !b64_tag || !b64_ct) {
+		if (!b64_iv || !b64_tag || !b64_ct) {
 			fprintf(stderr, "base64 encode failed\n");
-			free(enc_key);
-			if (b64_enc_key) free(b64_enc_key);
-			if (b64_iv) free(b64_iv);
-			if (b64_tag) free(b64_tag);
-			if (b64_ct) free(b64_ct);
+			free(b64_iv); free(b64_tag); free(b64_ct);
 			break;
 		}
 
-		// Format the message: [<enc_key_len>][<enc_key_b64>][<iv_b64>][<tag_b64>][<ciphertext_b64>]
-		// enc_key_len is the raw encrypted key length in bytes (not base64 length)
-		char *final_msg = (char *)malloc(6 + strlen(b64_enc_key) + strlen(b64_iv) + strlen(b64_tag) + strlen(b64_ct) + 64);
-		if (!final_msg) { 
-			fprintf(stderr, "malloc final_msg failed\n"); 
-			free(enc_key);
-			free(b64_enc_key); free(b64_iv); 
-			free(b64_tag); free(b64_ct); 
-			break; 
-		}
+		// Final message: [GMSG][iv][tag][ciphertext]
+		char final_msg[BUFFER_SIZE * 2];
+		snprintf(final_msg, sizeof(final_msg),
+			"[GMSG][%s][%s][%s]", b64_iv, b64_tag, b64_ct);
 
-		snprintf(final_msg,
-			// safe size  
-			6 + strlen(b64_enc_key) + strlen(b64_iv) + strlen(b64_tag) + strlen(b64_ct) + 64,
-			"[%zu][%s][%s][%s][%s]", enc_key_len, b64_enc_key, b64_iv, b64_tag, b64_ct);
-
-		// Send
-		int send_res = send(connectSocket, final_msg, (int)strlen(final_msg), 0);
-		if (send_res == SOCKET_ERROR) {
-			fprintf(stderr, "send failed: %d\n", WSAGetLastError());
-		}
-
-		// Cleanup
-		free(enc_key);
-		free(b64_enc_key);
 		free(b64_iv);
 		free(b64_tag);
 		free(b64_ct);
-		free(final_msg);
+
+		// Send it
+		if (send(sock, final_msg, (int)strlen(final_msg), 0) == SOCKET_ERROR) {
+			fprintf(stderr, "send() failed: %d\n", WSAGetLastError());
+			break;
+		}
 	}
 
-	shutdown(connectSocket, SD_SEND);
+	shutdown(sock, SD_SEND);
 	return 0;
 }
 
+
 DWORD __stdcall ClientRecieveMessage(LPVOID lpParam) {
-	SOCKET connectSocket = (SOCKET)lpParam;
-	char receiveBuffer[BUFFER_SIZE];
+	SOCKET sock = (SOCKET)lpParam;
+	char buf[BUFFER_SIZE];
 
 	while (1) {
-		int iResult = recv(connectSocket, receiveBuffer, BUFFER_SIZE - 1, 0);
-		if (iResult > 0) {
-			receiveBuffer[iResult] = '\0';
-			printf("%s\n", receiveBuffer);
-			fflush(stdout);
-		}
-		else if (iResult == 0) {
+
+		int r = recv(sock, buf, BUFFER_SIZE - 1, 0);
+		if (r <= 0) {
 			printf("\nServer closed connection\n");
 			return 1;
 		}
-		else {
-			printf("\nrecv failed: %d\n", WSAGetLastError());
-			return 1;
+
+		buf[r] = '\0';
+
+		// Is it group key?
+		if (strncmp(buf, "[GKEY]", 6) == 0) {
+
+			char *p = strchr(buf + 6, '[');
+			if (!p) continue;
+
+			char *b64 = p + 1;
+			char *end = strchr(b64, ']');
+			if (!end) continue;
+
+			*end = '\0';
+
+			unsigned char *bin = NULL;
+			int bin_len = base64_decode(b64, strlen(b64), &bin);
+			if (bin_len == SENDER_KEY_LEN) {
+				memcpy(group_key, bin, SENDER_KEY_LEN);
+				group_key_set = 1;
+				printf("Group key received!\n");
+			}
+
+			free(bin);
+			continue;
 		}
+
+		// Is it encrypted group message?
+		if (strncmp(buf, "[GMSG]", 6) == 0) {
+
+			char *p = buf + 6;
+
+			// [iv]
+			char *b64_iv = strchr(p, '[') + 1;
+			char *end_iv = strchr(b64_iv, ']');
+			*end_iv = 0;
+
+			// [tag]
+			char *b64_tag = strchr(end_iv + 1, '[') + 1;
+			char *end_tag = strchr(b64_tag, ']');
+			*end_tag = 0;
+
+			// [cipher]
+			char *b64_ct = strchr(end_tag + 1, '[') + 1;
+			char *end_ct = strchr(b64_ct, ']');
+			*end_ct = 0;
+
+			unsigned char *iv_bin = NULL;
+			unsigned char *tag_bin = NULL;
+			unsigned char *cipher_text_bin = NULL;
+
+			int iv_len = base64_decode(b64_iv, strlen(b64_iv), &iv_bin);
+			int tag_len = base64_decode(b64_tag, strlen(b64_tag), &tag_bin);
+			int ct_len = base64_decode(b64_ct, strlen(b64_ct), &cipher_text_bin);
+
+			if (iv_len != IV_LEN || tag_len != TAG_LEN) {
+				free(iv_bin); free(tag_bin); free(cipher_text_bin);
+				continue;
+			}
+
+			int plain_text_len = aes256_gcm_decrypt(
+				cipher_text_bin, ct_len, 
+				group_key, iv_bin, tag_bin);
+
+			if (plain_text_len >= 0) {
+				cipher_text_bin[plain_text_len] = '\0';
+				printf("%s\n", cipher_text_bin);
+			}
+
+			free(iv_bin); free(tag_bin); free(cipher_text_bin);
+			continue;
+		}
+
+		// Fallback: plain message
+		printf("%s\n", buf);
 	}
-	shutdown(connectSocket, SD_RECEIVE);
+
 	return 0;
 }
 
@@ -226,7 +276,7 @@ int __cdecl main(int argc, char **argv)
 	char userName[MAX_NAME_LEN];
 
 
-	EnableVTMode();
+	EnableVTMode()
 
 	// Validate the parameters
 	if (argc != 2) {
@@ -281,6 +331,22 @@ int __cdecl main(int argc, char **argv)
 		WSACleanup();
 		return 1;
 	}
+
+	if (generate_group_key(group_key) != SUCCESS) {
+		printf("Failed to generate group key\n");
+		closesocket(ConnectSocket);
+		WSACleanup();
+		return 1;
+	}
+
+	if (send_group_key(ConnectSocket, group_key) != SUCCESS) {
+		printf("Failed to send group key to server\n");
+		closesocket(ConnectSocket);
+		WSACleanup();
+		return 1;
+	}
+	group_key_set = 1;
+	printf("Local group key generated and sent;\n");
 
 	printf("Enter name(16 characters max): ");
 	while (1) {

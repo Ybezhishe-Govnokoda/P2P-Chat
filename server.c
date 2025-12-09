@@ -1,51 +1,27 @@
-﻿#define WIN32_LEAN_AND_MEAN
-#define _CRT_SECURE_NO_WARNINGS
-
-#include <windows.h>
+﻿#define _CRT_SECURE_NO_WARNINGS
 #include <winsock2.h>
 #include <ws2tcpip.h>
+#include <windows.h>
 #include <stdio.h>
-#include <locale.h>
 #include <stdlib.h>
 #include <string.h>
-#include <ctype.h>
 
-#include <openssl/applink.c>
-
-#include "msg_parser.h"
-#include "msg_encryption.h"
-
-
-// Necessary for linking with ws2_32.lib
-#pragma comment(lib, "ws2_32.lib")
-
+#pragma comment(lib, "Ws2_32.lib")
 
 #define DEFAULT_PORT "27015"
-#define BUFFER_SIZE 1024
+#define BUFFER_SIZE 4096
 #define MAX_CLIENTS 50
 #define MAX_NAME_LEN 32
 #define CODE_LENGTH 6
 
-#define CLEANUP \
-do {\
-   if (enc_key_bin) free(enc_key_bin);\
-   if (iv_bin) free(iv_bin);\
-   if (tag_bin) free(tag_bin);\
-   if (ct_bin) free(ct_bin);\
-} while (0);
-
-
 typedef struct {
-    SOCKET socket;
-	 char name[MAX_NAME_LEN];
+   SOCKET socket;
+   char name[MAX_NAME_LEN];
 } Client;
-
 
 Client clients[MAX_CLIENTS];
 int clientCount = 0;
 CRITICAL_SECTION clientsLock; // To protect access to clients array
-EVP_PKEY *g_server_privkey = NULL;
-
 
 DWORD __stdcall ClientHandler(LPVOID lpParam) {
    SOCKET clientSocket = (SOCKET)(uintptr_t)lpParam;
@@ -53,17 +29,28 @@ DWORD __stdcall ClientHandler(LPVOID lpParam) {
    int bytesReceived;
    char senderName[MAX_NAME_LEN] = "Unknown";
 
-   while ((bytesReceived = recv(clientSocket, recvbuf, BUFFER_SIZE - 1, 0)) > 0) {
-      recvbuf[bytesReceived] = '\0';
+   while ((bytesReceived = recv(clientSocket, recvbuf, BUFFER_SIZE, 0)) > 0) {
+      // Note: bytesReceived may be 0..BUFFER_SIZE. We do not assume NUL-terminated.
+      // For string operations below we temporarily NUL-terminate a copy if needed.
 
-		// Check for name setting message
-      if (strncmp(recvbuf, "[NAME]", CODE_LENGTH) == 0) {
+      // Handle NAME command (text based) — safe to treat as string since clients send it as text
+      if (bytesReceived >= CODE_LENGTH &&
+         strncmp(recvbuf, "[NAME]", CODE_LENGTH) == 0) {
+         // It's a name set request (we can NUL-terminate safely for parsing)
+         // Create a temporary null-terminated string to extract the name
+         char tmp[BUFFER_SIZE + 1];
+         int copy_len = bytesReceived < BUFFER_SIZE ? bytesReceived : BUFFER_SIZE - 1;
+         memcpy(tmp, recvbuf, copy_len);
+         tmp[copy_len] = '\0';
+
          EnterCriticalSection(&clientsLock);
          for (int i = 0; i < clientCount; i++) {
             if (clients[i].socket == clientSocket) {
-               strncpy_s(clients[i].name, MAX_NAME_LEN, recvbuf + 6, MAX_NAME_LEN - 1);
+               // copy name after the tag "[NAME]"
+               strncpy_s(clients[i].name, MAX_NAME_LEN, tmp + 6, _TRUNCATE);
                clients[i].name[MAX_NAME_LEN - 1] = '\0';
-               strncpy_s(senderName, MAX_NAME_LEN, clients[i].name, MAX_NAME_LEN);
+               strncpy_s(senderName, MAX_NAME_LEN, clients[i].name, _TRUNCATE);
+               senderName[MAX_NAME_LEN - 1] = '\0';
                printf("Client set name: %s\n", clients[i].name);
                break;
             }
@@ -72,87 +59,58 @@ DWORD __stdcall ClientHandler(LPVOID lpParam) {
          continue;
       }
 
-      // parse -> get binary fields (malloced)
-      int enc_key_len = 0;
-      unsigned char *enc_key_bin = NULL, *iv_bin = NULL, *tag_bin = NULL, *ct_bin = NULL;
-      int enc_key_bin_len = 0, iv_len = 0, tag_len = 0, ct_len = 0;
-
-      int err_code = parse_message_base64(recvbuf,
-         &enc_key_len,
-         &enc_key_bin, &enc_key_bin_len,
-         &iv_bin, &iv_len,
-         &tag_bin, &tag_len,
-         &ct_bin, &ct_len);
-      if (err_code != PARSE_OK) {
-
-         printf("Failed to parse message from client.\n");
-         printf("%d", err_code);
-         // free if any allocated
-         CLEANUP;
-         continue;
+      // For logging: attempt to detect whether this is a group key or group message marker
+      // Do a safe check on the beginning of buffer (since buffer may not be NUL-terminated)
+      if (bytesReceived >= 6) {
+         if (strncmp(recvbuf, "[GKEY]", 6) == 0) {
+            printf("[%s] sent group key (forwarding)...\n", senderName);
+         }
+         else if (strncmp(recvbuf, "[GMSG]", 6) == 0) {
+            printf("[%s] sent group message (forwarding)...\n", senderName);
+         }
+         else {
+            // generic encrypted/unknown payload
+            printf("[%s] sent data (len=%d) — forwarding...\n", senderName, bytesReceived);
+         }
+      }
+      else {
+         printf("[%s] sent data (len=%d) — forwarding...\n", senderName, bytesReceived);
       }
 
-      unsigned char *aes_key = AES_key_decrypt(
-         g_server_privkey, 
-         enc_key_bin, 
-         enc_key_bin_len
-      );
-      if (!aes_key) {
-         printf("Failed to decrypt AES key.\n");
-         CLEANUP;
-         continue;
-      }
-
-      // Decrypt ciphertext (in-place)
-      int pt_len = aes_gcm_decrypt_inplace(
-         ct_bin, ct_len, 
-         aes_key, iv_bin, 
-         iv_len, tag_bin
-      );
-      if (pt_len < 0) {
-         printf("AES-GCM decryption failed (auth fail)\n");
-         CLEANUP;
-         continue;
-      }
-
-      if (aes_key) { free(aes_key); }
-
-
-      // Ensure null-termination for text usage
-      int printable_len = pt_len;
-      if (printable_len >= BUFFER_SIZE - 1) printable_len = BUFFER_SIZE - 2;
-      ct_bin[printable_len] = '\0';
-
-      printf("[%s]: %s\n", senderName, (char *)ct_bin);
-
-      // Broadcast plaintext to other clients
-      char messageWithName[BUFFER_SIZE + MAX_NAME_LEN + 8];
-      snprintf(
-         messageWithName, sizeof(messageWithName), 
-         "\x1B[32m%s:\033[0m %s", 
-         senderName, 
-         (char *)ct_bin
-      );
-
+      // Broadcast raw bytesReceived to other clients
       EnterCriticalSection(&clientsLock);
       for (int i = 0; i < clientCount; i++) {
-         if (clients[i].socket != clientSocket) {
-            int sent = send(clients[i].socket, messageWithName, (int)strlen(messageWithName), 0);
-            if (sent == SOCKET_ERROR) {
-               printf("send() failed: %d\n", WSAGetLastError());
+         SOCKET dst = clients[i].socket;
+         if (dst != clientSocket && dst != INVALID_SOCKET) {
+            int total_sent = 0;
+            while (total_sent < bytesReceived) {
+               int s = send(dst, recvbuf + total_sent, bytesReceived - total_sent, 0);
+               if (s == SOCKET_ERROR) {
+                  int err = WSAGetLastError();
+                  printf("send() to client %d failed: %d\n", i, err);
+                  break;
+               }
+               total_sent += s;
             }
          }
       }
       LeaveCriticalSection(&clientsLock);
-
-      CLEANUP;
    }
 
-	// If disconnected - delete from clients array
+   if (bytesReceived == 0) {
+      // connection closed gracefully
+      printf("Client disconnected (socket %llu)\n", (unsigned long long)clientSocket);
+   }
+   else if (bytesReceived == SOCKET_ERROR) {
+      printf("recv failed: %d\n", WSAGetLastError());
+   }
+
+   // If disconnected - delete from clients array
    EnterCriticalSection(&clientsLock);
    for (int i = 0; i < clientCount; i++) {
       if (clients[i].socket == clientSocket) {
-         printf("Client %s disconnected\n", clients[i].name);
+         printf("Removing client '%s' (socket %llu)\n", clients[i].name, (unsigned long long)clientSocket);
+         // swap-with-last
          clients[i] = clients[clientCount - 1];
          clientCount--;
          break;
@@ -164,16 +122,11 @@ DWORD __stdcall ClientHandler(LPVOID lpParam) {
    return 0;
 }
 
-
-int __cdecl main(void) 
-{
+int __cdecl main(void) {
    WSADATA wsaData;
 
-   SOCKET ServerSocket = INVALID_SOCKET,
-      ClientSocket = INVALID_SOCKET;
-
+   SOCKET ServerSocket = INVALID_SOCKET, ClientSocket = INVALID_SOCKET;
    struct addrinfo *result = NULL, hints;
-
    HANDLE threads[MAX_CLIENTS];
 
    InitializeCriticalSection(&clientsLock);
@@ -184,22 +137,21 @@ int __cdecl main(void)
       return 1;
    }
 
-	// Set up the hints address info structure
-	ZeroMemory(&hints, sizeof(hints));
-	hints.ai_family = AF_INET;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_protocol = IPPROTO_TCP;
+   // Set up the hints address info structure
+   ZeroMemory(&hints, sizeof(hints));
+   hints.ai_family = AF_INET;
+   hints.ai_socktype = SOCK_STREAM;
+   hints.ai_protocol = IPPROTO_TCP;
    hints.ai_flags = AI_PASSIVE;
 
-
-	// Resolve the server address and port
+   // Resolve the server address and port
    if (getaddrinfo(NULL, DEFAULT_PORT, &hints, &result) != 0) {
       printf("getaddrinfo failed.\n");
       WSACleanup();
       return 1;
    }
 
-	// Create a SOCKET for the server to listen for client connections
+   // Create a SOCKET for the server to listen for client connections
    ServerSocket = socket(result->ai_family, result->ai_socktype, result->ai_protocol);
    if (ServerSocket == INVALID_SOCKET) {
       printf("Error at socket(): %ld\n", WSAGetLastError());
@@ -211,7 +163,7 @@ int __cdecl main(void)
    int opt = 1;
    setsockopt(ServerSocket, SOL_SOCKET, SO_REUSEADDR, (const char *)&opt, sizeof(opt));
 
-	// Setup the TCP listening socket
+   // Setup the TCP listening socket
    if (bind(ServerSocket, result->ai_addr, (int)result->ai_addrlen) == SOCKET_ERROR) {
       printf("bind failed with error: %d\n", WSAGetLastError());
       freeaddrinfo(result);
@@ -222,20 +174,16 @@ int __cdecl main(void)
 
    freeaddrinfo(result);
 
-	// Start listening for incoming connections
+   // Start listening for incoming connections
    if (listen(ServerSocket, SOMAXCONN) == SOCKET_ERROR) {
       printf("Listen failed with error: %d\n", WSAGetLastError());
       closesocket(ServerSocket);
       WSACleanup();
       return 1;
    }
-	printf("Server is listening on port %s...\n", DEFAULT_PORT);
+   printf("Server is listening on port %s...\n", DEFAULT_PORT);
 
-   g_server_privkey = load_private_key("server_priv.pem");
-   if (!g_server_privkey) return 1;
-
-   // Processing receiving and sending messages 
-   // to the server with multithreading
+   // Main accept loop
    while (1) {
       ClientSocket = accept(ServerSocket, NULL, NULL);
       if (ClientSocket == INVALID_SOCKET) {
@@ -245,20 +193,28 @@ int __cdecl main(void)
 
       EnterCriticalSection(&clientsLock);
       if (clientCount < MAX_CLIENTS) {
-         clients[clientCount++].socket = ClientSocket;
-         LeaveCriticalSection(&clientsLock);
-
-         threads[clientCount - 1] = CreateThread(
-            NULL, 
-            0, 
-            ClientHandler, 
+         clients[clientCount].socket = ClientSocket;
+         clients[clientCount].name[0] = '\0';
+         // create thread for new client
+         DWORD tid;
+         threads[clientCount] = CreateThread(
+            NULL,
+            0,
+            ClientHandler,
             (LPVOID)ClientSocket,
-            0, 
-            NULL
+            0,
+            &tid
          );
-         if (!threads[clientCount - 1]) { clientCount--; }
-         else printf("Client connected! Total: %d\n", clientCount);
-
+         if (!threads[clientCount]) {
+            printf("CreateThread failed: %d\n", GetLastError());
+            // cleanup slot
+            clients[clientCount].socket = INVALID_SOCKET;
+         }
+         else {
+            clientCount++;
+            printf("Client connected! Total: %d\n", clientCount);
+         }
+         LeaveCriticalSection(&clientsLock);
       }
       else {
          LeaveCriticalSection(&clientsLock);
@@ -267,12 +223,15 @@ int __cdecl main(void)
       }
    }
 
-   WaitForMultipleObjects(clientCount, threads, TRUE, INFINITE);
-
-   for (int i = 0; i < clientCount; i++)
+   // never reached in this simple server, but for completeness:
+   for (int i = 0; i < clientCount; i++) {
       CloseHandle(threads[i]);
+      shutdown(clients[i].socket, SD_BOTH);
+      closesocket(clients[i].socket);
+   }
 
    closesocket(ServerSocket);
    WSACleanup();
+   DeleteCriticalSection(&clientsLock);
    return 0;
 }
