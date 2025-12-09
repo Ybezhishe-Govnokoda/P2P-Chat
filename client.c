@@ -1,53 +1,4 @@
-#define WIN32_LEAN_AND_MEAN
-#define _CRT_SECURE_NO_WARNINGS
-
-#include <windows.h>
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <stdio.h>
-#include <string.h>
-
-#include "openssl\applink.c"
-#include "msg_encryption.h"
-
-
-// Need to link with Ws2_32.lib, Mswsock.lib, and Advapi32.lib
-#pragma comment (lib, "Ws2_32.lib")
-#pragma comment (lib, "Mswsock.lib")
-#pragma comment (lib, "AdvApi32.lib")
-
-
-#define BUFFER_SIZE 1024
-#define DEFAULT_PORT "27015"
-#define THREAD_COUNT 2
-#define SEND_THREAD 0
-#define RECV_THREAD 1
-#define MAX_NAME_LEN 32
-
-#define IV_LEN 12
-#define TAG_LEN 16
-
-
-typedef enum {
-	SUCCESS = 0,
-	GENERATE_KEY_FAIL = -1,
-	BASE64_ENCODE_FAIL = -2,
-	SEND_FAIL = -3,
-} client_state;
-
-
-// Enable Virtual Terminal Processing for colored output
-#define EnableVTMode() do {                         \
-	HANDLE hOut = GetStdHandle(STD_OUTPUT_HANDLE);   \
-	if (hOut == INVALID_HANDLE_VALUE) return;        \
-                                                    \
-	DWORD dwMode = 0;                                \
-	if (!GetConsoleMode(hOut, &dwMode)) return;      \
-                                                    \
-	dwMode |= ENABLE_VIRTUAL_TERMINAL_PROCESSING;    \
-	SetConsoleMode(hOut, dwMode);                    \
-} while (0);
-
+#include "client.h"
 
 // -----------------------------------------
 // GENERATE SENDER KEY (Group Key)
@@ -87,8 +38,12 @@ int send_group_key(SOCKET sock, const unsigned char *group_key) {
 
 
 // ---------- client send thread ----------
+#ifdef _WIN32
 DWORD __stdcall ClientSendMessage(LPVOID lpParam) {
-	SOCKET sock = (SOCKET)(uintptr_t)lpParam;
+#else
+void *ClientSendMessage(void lpParam) {
+#endif
+	my_socket_t sock = (my_socket_t)(uintptr_t)lpParam;
 	char buffer[BUFFER_SIZE];
 
 	unsigned char iv[IV_LEN];
@@ -159,19 +114,22 @@ DWORD __stdcall ClientSendMessage(LPVOID lpParam) {
 		free(b64_ct);
 
 		// Send it
-		if (send(sock, final_msg, (int)strlen(final_msg), 0) == SOCKET_ERROR) {
-			fprintf(stderr, "send() failed: %d\n", WSAGetLastError());
+		if (send(sock, final_msg, (int)strlen(final_msg), 0) == MY_SEND_ERROR) {
+			fprintf(stderr, "send() failed: %d\n", my_get_last_error());
 			break;
 		}
 	}
 
-	shutdown(sock, SD_SEND);
+	my_shutdown_send(sock);
 	return 0;
 }
 
-
+#ifdef _WIN32
 DWORD __stdcall ClientRecieveMessage(LPVOID lpParam) {
-	SOCKET sock = (SOCKET)lpParam;
+#else
+void __stdcall *ClientRecieveMessage(void lpParam) {
+#endif
+	my_socket_t sock = (my_socket_t)lpParam;
 	char buf[BUFFER_SIZE];
 
 	while (1) {
@@ -262,147 +220,102 @@ DWORD __stdcall ClientRecieveMessage(LPVOID lpParam) {
 }
 
 
-int __cdecl main(int argc, char **argv)
+int main(int argc, char **argv)
 {
-	WSADATA wsaData;
-	SOCKET ConnectSocket = INVALID_SOCKET;
-
-	struct addrinfo *result = NULL,
-		*ptr = NULL,
-		hints;
-
-	HANDLE threads[THREAD_COUNT];
-
+	my_socket_t ConnectSocket = -1;
+	struct addrinfo *result = NULL, *ptr = NULL, hints;
+	THREAD_TYPE threads[THREAD_COUNT];
 	char userName[MAX_NAME_LEN];
 
+#ifdef _WIN32
+	WSADATA wsaData;
+	if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
+		printf("WSAStartup failed\n");
+		return 1;
+	}
+#endif
 
-	EnableVTMode()
+	EnableVTMode();
 
-	// Validate the parameters
 	if (argc != 2) {
 		printf("usage: %s server-name\n", argv[0]);
 		return 1;
 	}
 
-	// Initialize Winsock
-	if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-		printf("WSAStartup failed with error: %d\n", WSAGetLastError());
-		return 1;
-	}
-
-	ZeroMemory(&hints, sizeof(hints));
+	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = AF_INET;
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_protocol = IPPROTO_TCP;
 
-	// Resolve the server address and port
 	if (getaddrinfo(argv[1], DEFAULT_PORT, &hints, &result) != 0) {
-		printf("getaddrinfo failed with error: %d\n", WSAGetLastError());
+		perror("getaddrinfo failed");
+#ifdef _WIN32
 		WSACleanup();
+#endif
 		return 1;
 	}
 
-	// Attempt to connect to an address until one succeeds
 	for (ptr = result; ptr != NULL; ptr = ptr->ai_next) {
-		// Create a SOCKET for connecting to server
 		ConnectSocket = socket(ptr->ai_family, ptr->ai_socktype, ptr->ai_protocol);
+		if (ConnectSocket < 0) continue;
 
-		if (ConnectSocket == INVALID_SOCKET) {
-			printf("Error at socket(): %ld\n", WSAGetLastError());
-			freeaddrinfo(result);
-			WSACleanup();
-			return 1;
-		}
+		if (connect(ConnectSocket, ptr->ai_addr, (int)ptr->ai_addrlen) == 0) break;
 
-		// Connect to server.
-		if (connect(ConnectSocket, ptr->ai_addr, (int)ptr->ai_addrlen) == SOCKET_ERROR) 
-		{
-			closesocket(ConnectSocket);
-			ConnectSocket = INVALID_SOCKET;
-			continue;
-		}
-		break;
+		my_close(ConnectSocket);
+		ConnectSocket = -1;
 	}
 
 	freeaddrinfo(result);
 
-	if (ConnectSocket == INVALID_SOCKET) {
+	if (ConnectSocket < 0) {
 		printf("Unable to connect to server!\n");
+#ifdef _WIN32
 		WSACleanup();
+#endif
 		return 1;
 	}
 
-	if (generate_group_key(group_key) != SUCCESS) {
-		printf("Failed to generate group key\n");
-		closesocket(ConnectSocket);
+	if (generate_group_key(group_key) != SUCCESS || send_group_key(ConnectSocket, group_key) != SUCCESS) {
+		printf("Failed to generate/send group key\n");
+		my_close(ConnectSocket);
+#ifdef _WIN32
 		WSACleanup();
-		return 1;
-	}
-
-	if (send_group_key(ConnectSocket, group_key) != SUCCESS) {
-		printf("Failed to send group key to server\n");
-		closesocket(ConnectSocket);
-		WSACleanup();
+#endif
 		return 1;
 	}
 	group_key_set = 1;
-	printf("Local group key generated and sent;\n");
+	printf("Local group key generated and sent\n");
 
-	printf("Enter name(16 characters max): ");
+	printf("Enter name (16 characters max): ");
 	while (1) {
 		if (fgets(userName, MAX_NAME_LEN, stdin)) {
 			size_t len = strlen(userName);
-			if (len > 0 && userName[len - 1] == '\n')
-				userName[len - 1] = '\0'; // Remove \n
+			if (len && userName[len - 1] == '\n') userName[len - 1] = '\0';
 
 			if (strlen(userName) <= 16) {
-				// Add prefix [NAME]
 				char prefix[] = "[NAME]";
 				size_t len_prefix = strlen(prefix);
-				len = strlen(userName);
-
-				memmove(userName + len_prefix, userName, len + 1);
+				memmove(userName + len_prefix, userName, strlen(userName) + 1);
 				memcpy(userName, prefix, len_prefix);
 				break;
 			}
-			else printf("Failed to get name. Try again: \n");
+			else printf("Name too long, try again:\n");
 		}
 	}
 
-	// Send the name to server
-	if (send(ConnectSocket, userName, (int)strlen(userName), 0) == SOCKET_ERROR)
-		printf("send failed: %d\n", WSAGetLastError());
+	if (send(ConnectSocket, userName, (int)strlen(userName), 0) < 0)
+		perror("send failed");
 
-	Sleep(300); // Little delay so server can process the name
-
-	printf("\nConnected to server. Type messages to send. Type 'exit' to quit.\n");
-
-	// Create threads for sending and receiving messages
-	threads[SEND_THREAD] = CreateThread(
-		NULL,
-		0,
-		ClientSendMessage,
-		(LPVOID)ConnectSocket,
-		0,
-		NULL
-	);
-
-	threads[RECV_THREAD] = CreateThread(
-		NULL,
-		0,
-		ClientRecieveMessage,
-		(LPVOID)ConnectSocket,
-		0,
-		NULL
-	);
-
-	// cleanup
-	WaitForMultipleObjects(THREAD_COUNT, threads, TRUE, INFINITE);
+	THREAD_CREATE(threads[SEND_THREAD], ClientSendMessage, (void *)(uintptr_t)ConnectSocket);
+	THREAD_CREATE(threads[RECV_THREAD], ClientRecieveMessage, (void *)(uintptr_t)ConnectSocket);
 
 	for (int i = 0; i < THREAD_COUNT; i++)
-		CloseHandle(threads[i]);
+		THREAD_JOIN(threads[i]);
 
-	closesocket(ConnectSocket);
+	my_close(ConnectSocket);
+#ifdef _WIN32
 	WSACleanup();
+#endif
+
 	return 0;
 }
