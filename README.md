@@ -26,25 +26,38 @@
 
 ## ⚙️ Установка и запуск
 
-### 1. Сгенерировать ключи
-```bash
-openssl genrsa -out server_priv.pem 2048
-openssl rsa -in server_priv.pem -pubout -out server_pub.pem
-```
+### 1. Скомпилировать сервер
+**Windows:**
 
-### 2. Скомпилировать сервер
 ```bash
 cl server.c /I "C:\OpenSSL-Win64\include" /link /LIBPATH:"C:\OpenSSL-Win64\lib\VC\x64\MD" libssl.lib libcrypto.lib ws2_32.lib
 ```
 Если у вас другой путь к папке с OpenSSL - укажите его. 
 В /LIBPATH: нужно указать полный путь к файлам libssl.lib и libcrypto.lib
 
-### 3. Скомпилировать клиент
+**Linux/Mac:**
+
+```bash
+gcc server.c msg_encryption.c -o server \
+    -lssl -lcrypto -pthread
+```
+
+
+### 2. Скомпилировать клиент
+**Windows:**
+
 ```bash
 cl client.c /I "C:\OpenSSL-Win64\include" /link /LIBPATH:"C:\OpenSSL-Win64\lib\VC\x64\MD" libcrypto.lib ws2_32.lib
 ```
 
-### 4. Запуск
+**Linux/Mac:**
+
+```bash
+gcc client.c msg_encryption.c -o client \
+    -lssl -lcrypto -pthread
+```
+
+### 3. Запуск
 Сначала нужно запустить сервер:
 ```bash
 server.exe
@@ -52,6 +65,14 @@ server.exe
 Затем клиент:
 ```bash
 client.exe <вставить сюда ip-адрес>
+```
+
+**Linux/Mac:**
+```bash
+./server
+```
+```bash
+./client <ip>
 ```
 
 ---
