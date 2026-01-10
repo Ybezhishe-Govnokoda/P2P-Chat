@@ -3,8 +3,8 @@ project(EChat LANGUAGES C)
 
 # SERVER
 add_executable(server
-    tests/test_server.c
-    #src/server.c
+    #tests/test_server.c
+    src/server.c
     include/MySocket.h
 )
 
@@ -15,8 +15,8 @@ target_include_directories(server
 
 # CLIENT
 add_executable(client
-    tests/test_client.c
-    #src/client.c
+    #tests/test_client.c
+    src/client.c
     src/MsgEncrypt.c
     include/MsgEncrypt.h
 )

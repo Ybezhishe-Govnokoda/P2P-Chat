@@ -36,7 +36,7 @@ int send_group_key(SOCKET sock, const unsigned char *group_key) {
 
 // Client send thread
 ClientSendMessage() {
-	my_socket_t sock = (my_socket_t)(uintptr_t)lpParam;
+	my_socket_t sock = client->socket;
 	char buffer[CLIENT_BUFFER_SIZE];
 
 	unsigned char iv[IV_LEN];
@@ -60,6 +60,14 @@ ClientSendMessage() {
 			break;
 		}
 
+		if (client->name) {
+			char name_prefix[MAX_NAME_LEN + 3];
+			snprintf(name_prefix, sizeof(name_prefix), "[%s] ", client->name);
+			size_t name_prefix_len = strlen(name_prefix);
+			memmove(buffer + name_prefix_len, buffer, plain_len + 1);
+			memcpy(buffer, name_prefix, name_prefix_len);
+			plain_len += name_prefix_len;
+		}
 
 		if (!group_key_set) {
 			printf("Cannot send: group key not received yet.\n");
@@ -209,11 +217,10 @@ ClientRecieveMessage() {
 
 int main(int argc, char **argv)
 {
-	Client Client;
-	Client.socket = -1;
+	Client client;
+	client.socket = -1;
 	struct addrinfo *result = NULL, *ptr = NULL, hints;
 	THREAD_TYPE threads[THREAD_COUNT];
-	char userName[MAX_NAME_LEN];
 
 	INIT_WINSOCK();
 
@@ -236,26 +243,26 @@ int main(int argc, char **argv)
 	}
 
 	for (ptr = result; ptr != NULL; ptr = ptr->ai_next) {
-		Client.socket = socket(ptr->ai_family, ptr->ai_socktype, ptr->ai_protocol);
-		if (Client.socket < 0) continue;
+		client.socket = socket(ptr->ai_family, ptr->ai_socktype, ptr->ai_protocol);
+		if (client.socket < 0) continue;
 
-		if (connect(Client.socket, ptr->ai_addr, (int)ptr->ai_addrlen) == 0) break;
+		if (connect(client.socket, ptr->ai_addr, (int)ptr->ai_addrlen) == 0) break;
 
-		my_close(Client.socket);
-		Client.socket = -1;
+		my_close(client.socket);
+		client.socket = -1;
 	}
 
 	freeaddrinfo(result);
 
-	if (Client.socket < 0) {
+	if (client.socket < 0) {
 		printf("Unable to connect to server!\n");
 		WSA_CLEANUP();
 		return 1;
 	}
 
-	if (generate_group_key(group_key) != SUCCESS || send_group_key(Client.socket, group_key) != SUCCESS) {
+	if (generate_group_key(group_key) != SUCCESS || send_group_key(client.socket, group_key) != SUCCESS) {
 		printf("Failed to generate/send group key\n");
-		my_close(Client.socket);
+		my_close(client.socket);
 		WSA_CLEANUP();
 		return 1;
 	}
@@ -264,31 +271,33 @@ int main(int argc, char **argv)
 
 	printf("Enter name (16 characters max): ");
 	while (1) {
-		if (fgets(userName, MAX_NAME_LEN, stdin)) {
-			size_t len = strlen(userName);
-			if (len && userName[len - 1] == '\n') userName[len - 1] = '\0';
+		if (fgets(client.name, MAX_NAME_LEN, stdin)) {
+			size_t len = strlen(client.name);
+			if (len && client.name[len - 1] == '\n') client.name[len - 1] = '\0';
 
-			if (strlen(userName) <= 16) {
+			if (strlen(client.name) <= 16) {
 				char prefix[] = "[NAME]";
 				size_t len_prefix = strlen(prefix);
-				memmove(userName + len_prefix, userName, strlen(userName) + 1);
-				memcpy(userName, prefix, len_prefix);
+				memmove(client.name + len_prefix, client.name, strlen(client.name) + 1);
+				memcpy(client.name, prefix, len_prefix);
 				break;
 			}
 			else printf("Name too long, try again:\n");
 		}
 	}
 
-	if (send(Client.socket, userName, (int)strlen(userName), 0) < 0)
+	char name_msg[MAX_NAME_LEN + CODE_LENGTH + 1];
+	snprintf(name_msg, sizeof(name_msg), "[NAME]%s", client.name);
+	if (send(client.socket, name_msg, (int)strlen(name_msg), 0) < 0)
 		perror("send failed");
 
-	THREAD_CREATE(threads[SEND_THREAD], ClientSendMessage, (void *)(uintptr_t)Client.socket);
-	THREAD_CREATE(threads[RECV_THREAD], ClientRecieveMessage, (void *)(uintptr_t)Client.socket);
+	THREAD_CREATE(threads[SEND_THREAD], ClientSendMessage, &client);
+	THREAD_CREATE(threads[RECV_THREAD], ClientRecieveMessage, (void *)(uintptr_t)client.socket);
 
 	for (int i = 0; i < THREAD_COUNT; i++)
 		THREAD_JOIN(threads[i]);
 
-	my_close(Client.socket);
+	my_close(client.socket);
 	WSA_CLEANUP();
 
 	return 0;
