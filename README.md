@@ -1,68 +1,36 @@
 ﻿# Encrypted P2P Chat (C Version)
 
-Простой зашифрованный **peer-to-peer чат**, написанный на чистом **C**. 
+Simple encrypted **peer-to-peer chat**, written in pure **C**.
 
 ---
 
 ## Возможности
 
-✅ Поддержка **нескольких клиентов** (до 50 одновременно)  
-✅ Каждый клиент обрабатывается в **отдельном потоке**  
-✅ Чистая реализация на **C**  
-✅ Базовая передача сообщений между клиентом и сервером  
+✅ Support **several clients** (up to 50 simultaneously)  
+✅ Each client is handled in a **separate thread**  
+✅ Clean implementation in **C**  
+✅ Basic message transmission between client and server  
 
 ---
 
 ## Технологии
 
-| Компонент | Используется |
+| Component | Used |
 |------------|---------------|
-| **Язык** | C |
-| **Библиотеки** | Winsock2, OpenSSL |
-| **ОС** | Cross-platform |
-| **Компилятор** | MSVC/gcc |
+| **Language** | C |
+| **Libraries** | Winsock2, OpenSSL |
+| **OS** | Cross-platform |
+| **Compiler** | MSVC/gcc |
 
 ---
 
-## Установка и запуск
+## Запуск
 
-### 1. Скомпилировать сервер
-**Windows:**
-
-```bash
-cl server.c /I "C:\OpenSSL-Win64\include" /link /LIBPATH:"C:\OpenSSL-Win64\lib\VC\x64\MD" libssl.lib libcrypto.lib ws2_32.lib
-```
-Если у вас другой путь к папке с OpenSSL - укажите его. 
-В /LIBPATH: нужно указать полный путь к файлам libssl.lib и libcrypto.lib
-
-**Linux/Mac:**
-
-```bash
-gcc server.c msg_encryption.c -o server \
-    -lssl -lcrypto -pthread
-```
-
-
-### 2. Скомпилировать клиент
-**Windows:**
-
-```bash
-cl client.c /I "C:\OpenSSL-Win64\include" /link /LIBPATH:"C:\OpenSSL-Win64\lib\VC\x64\MD" libcrypto.lib ws2_32.lib
-```
-
-**Linux/Mac:**
-
-```bash
-gcc client.c msg_encryption.c -o client \
-    -lssl -lcrypto -pthread
-```
-
-### 3. Запуск
-Сначала нужно запустить сервер:
+After build need to run server:
 ```bash
 server.exe
 ```
-Затем клиент:
+Then client:
 ```bash
 client.exe <вставить сюда ip-адрес>
 ```
@@ -79,12 +47,12 @@ client.exe <вставить сюда ip-адрес>
 
 ## Команды для сервера
 
-Чтобы выйти с сервера, в поле для сообщений нужно ввести команду "exit"
+To exit server, type "exit"
 ```bash
 exit
 ```
 
-Чтобы сменить никнейм, нужно ввести [NAME] + новый ник
+To change nickname, type [NAME] + new name
 ```bash
-[NAME]Test
+[NAME]User
 ```
