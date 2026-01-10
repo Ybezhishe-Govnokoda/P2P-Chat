@@ -4,7 +4,7 @@ Simple encrypted **peer-to-peer chat**, written in pure **C**.
 
 ---
 
-## Возможности
+## Abilities
 
 ✅ Support **several clients** (up to 50 simultaneously)  
 ✅ Each client is handled in a **separate thread**  
@@ -13,7 +13,7 @@ Simple encrypted **peer-to-peer chat**, written in pure **C**.
 
 ---
 
-## Технологии
+## Technologies
 
 | Component | Used |
 |------------|---------------|
@@ -24,7 +24,7 @@ Simple encrypted **peer-to-peer chat**, written in pure **C**.
 
 ---
 
-## Запуск
+## Launching
 
 After build need to run server:
 ```bash
@@ -45,7 +45,7 @@ client.exe <вставить сюда ip-адрес>
 
 ---
 
-## Команды для сервера
+## Commands for client
 
 To exit server, type "exit"
 ```bash

@@ -73,7 +73,7 @@ typedef int my_socket_t;
 #define DEFAULT_PORT "27015"
 #define SERVER_BUFFER_SIZE 4096
 #define MAX_CLIENTS 50
-#define MAX_NAME_LEN 32
+#define MAX_NAME_LEN 16
 #define CODE_LENGTH 6
 
 typedef struct {
@@ -131,7 +131,6 @@ typedef struct {
 #define THREAD_COUNT 2
 #define SEND_THREAD 0
 #define RECV_THREAD 1
-#define MAX_NAME_LEN 32
 
 #define IV_LEN 12
 #define TAG_LEN 16
@@ -144,9 +143,9 @@ typedef enum {
 } client_state;
 
 #ifdef _WIN32
-#define ClientSendMessage() DWORD __stdcall ClientSendMessage(LPVOID lpParam)
+#define ClientSendMessage() DWORD __stdcall ClientSendMessage(Client *client)
 #else
-#define ClientSendMessage() void *ClientSendMessage(void lpParam)
+#define ClientSendMessage() void *ClientSendMessage(Client *client)
 #endif
 
 #ifdef _WIN32
