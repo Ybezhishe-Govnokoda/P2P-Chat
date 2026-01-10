@@ -1,8 +1,7 @@
-#include "client.h"
+#include "MySocket.h"
+#include "MsgEncrypt.h"
 
-// -----------------------------------------
-// GENERATE SENDER KEY (Group Key)
-// -----------------------------------------
+// Generate sender key (Group Key)
 int generate_group_key(unsigned char *group_key_out) {
 	if (RAND_bytes(group_key_out, SENDER_KEY_LEN) != 1) {
 		fprintf(stderr, "RAND_bytes failed generating group key\n");
@@ -11,9 +10,7 @@ int generate_group_key(unsigned char *group_key_out) {
 	return SUCCESS;
 }
 
-// -----------------------------------------
 // Encode and send group key to server
-// -----------------------------------------
 int send_group_key(SOCKET sock, const unsigned char *group_key) {
 	// Base64 encode the AES key
 	char *b64 = base64_encode(group_key, SENDER_KEY_LEN);
@@ -37,21 +34,16 @@ int send_group_key(SOCKET sock, const unsigned char *group_key) {
 }
 
 
-// ---------- client send thread ----------
-#ifdef _WIN32
-DWORD __stdcall ClientSendMessage(LPVOID lpParam) {
-#else
-void *ClientSendMessage(void lpParam) {
-#endif
+// Client send thread
+ClientSendMessage() {
 	my_socket_t sock = (my_socket_t)(uintptr_t)lpParam;
-	char buffer[BUFFER_SIZE];
+	char buffer[CLIENT_BUFFER_SIZE];
 
 	unsigned char iv[IV_LEN];
 	unsigned char tag[TAG_LEN];
 
 	while (1) {
 
-		// Read input from user
 		if (!fgets(buffer, sizeof(buffer), stdin))
 			break;
 
@@ -80,7 +72,7 @@ void *ClientSendMessage(void lpParam) {
 			break;
 		}
 
-		// Encrypt message in-place
+		// Encrypt message
 		int ciphertext_len =
 			aes256_gcm_encrypt(
 				(unsigned char *)buffer,
@@ -93,7 +85,6 @@ void *ClientSendMessage(void lpParam) {
 			break;
 		}
 
-		// Base64 encode parts
 		char *b64_iv = base64_encode(iv, IV_LEN);
 		char *b64_tag = base64_encode(tag, TAG_LEN);
 		char *b64_ct = base64_encode((unsigned char *)buffer, ciphertext_len);
@@ -105,7 +96,7 @@ void *ClientSendMessage(void lpParam) {
 		}
 
 		// Final message: [GMSG][iv][tag][ciphertext]
-		char final_msg[BUFFER_SIZE * 2];
+		char final_msg[CLIENT_BUFFER_SIZE * 2];
 		snprintf(final_msg, sizeof(final_msg),
 			"[GMSG][%s][%s][%s]", b64_iv, b64_tag, b64_ct);
 
@@ -124,17 +115,13 @@ void *ClientSendMessage(void lpParam) {
 	return 0;
 }
 
-#ifdef _WIN32
-DWORD __stdcall ClientRecieveMessage(LPVOID lpParam) {
-#else
-void __stdcall *ClientRecieveMessage(void lpParam) {
-#endif
+ClientRecieveMessage() {
 	my_socket_t sock = (my_socket_t)lpParam;
-	char buf[BUFFER_SIZE];
+	char buf[CLIENT_BUFFER_SIZE];
 
 	while (1) {
 
-		int r = recv(sock, buf, BUFFER_SIZE - 1, 0);
+		int r = recv(sock, buf, CLIENT_BUFFER_SIZE - 1, 0);
 		if (r <= 0) {
 			printf("\nServer closed connection\n");
 			return 1;
@@ -142,7 +129,7 @@ void __stdcall *ClientRecieveMessage(void lpParam) {
 
 		buf[r] = '\0';
 
-		// Is it group key?
+		// Check for group key
 		if (strncmp(buf, "[GKEY]", 6) == 0) {
 
 			char *p = strchr(buf + 6, '[');
@@ -166,7 +153,7 @@ void __stdcall *ClientRecieveMessage(void lpParam) {
 			continue;
 		}
 
-		// Is it encrypted group message?
+		// Check for group message
 		if (strncmp(buf, "[GMSG]", 6) == 0) {
 
 			char *p = buf + 6;
@@ -200,7 +187,7 @@ void __stdcall *ClientRecieveMessage(void lpParam) {
 			}
 
 			int plain_text_len = aes256_gcm_decrypt(
-				cipher_text_bin, ct_len, 
+				cipher_text_bin, ct_len,
 				group_key, iv_bin, tag_bin);
 
 			if (plain_text_len >= 0) {
@@ -222,18 +209,13 @@ void __stdcall *ClientRecieveMessage(void lpParam) {
 
 int main(int argc, char **argv)
 {
-	my_socket_t ConnectSocket = -1;
+	Client Client;
+	Client.socket = -1;
 	struct addrinfo *result = NULL, *ptr = NULL, hints;
 	THREAD_TYPE threads[THREAD_COUNT];
 	char userName[MAX_NAME_LEN];
 
-#ifdef _WIN32
-	WSADATA wsaData;
-	if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-		printf("WSAStartup failed\n");
-		return 1;
-	}
-#endif
+	INIT_WINSOCK();
 
 	EnableVTMode();
 
@@ -249,38 +231,32 @@ int main(int argc, char **argv)
 
 	if (getaddrinfo(argv[1], DEFAULT_PORT, &hints, &result) != 0) {
 		perror("getaddrinfo failed");
-#ifdef _WIN32
-		WSACleanup();
-#endif
+		WSA_CLEANUP();
 		return 1;
 	}
 
 	for (ptr = result; ptr != NULL; ptr = ptr->ai_next) {
-		ConnectSocket = socket(ptr->ai_family, ptr->ai_socktype, ptr->ai_protocol);
-		if (ConnectSocket < 0) continue;
+		Client.socket = socket(ptr->ai_family, ptr->ai_socktype, ptr->ai_protocol);
+		if (Client.socket < 0) continue;
 
-		if (connect(ConnectSocket, ptr->ai_addr, (int)ptr->ai_addrlen) == 0) break;
+		if (connect(Client.socket, ptr->ai_addr, (int)ptr->ai_addrlen) == 0) break;
 
-		my_close(ConnectSocket);
-		ConnectSocket = -1;
+		my_close(Client.socket);
+		Client.socket = -1;
 	}
 
 	freeaddrinfo(result);
 
-	if (ConnectSocket < 0) {
+	if (Client.socket < 0) {
 		printf("Unable to connect to server!\n");
-#ifdef _WIN32
-		WSACleanup();
-#endif
+		WSA_CLEANUP();
 		return 1;
 	}
 
-	if (generate_group_key(group_key) != SUCCESS || send_group_key(ConnectSocket, group_key) != SUCCESS) {
+	if (generate_group_key(group_key) != SUCCESS || send_group_key(Client.socket, group_key) != SUCCESS) {
 		printf("Failed to generate/send group key\n");
-		my_close(ConnectSocket);
-#ifdef _WIN32
-		WSACleanup();
-#endif
+		my_close(Client.socket);
+		WSA_CLEANUP();
 		return 1;
 	}
 	group_key_set = 1;
@@ -303,19 +279,17 @@ int main(int argc, char **argv)
 		}
 	}
 
-	if (send(ConnectSocket, userName, (int)strlen(userName), 0) < 0)
+	if (send(Client.socket, userName, (int)strlen(userName), 0) < 0)
 		perror("send failed");
 
-	THREAD_CREATE(threads[SEND_THREAD], ClientSendMessage, (void *)(uintptr_t)ConnectSocket);
-	THREAD_CREATE(threads[RECV_THREAD], ClientRecieveMessage, (void *)(uintptr_t)ConnectSocket);
+	THREAD_CREATE(threads[SEND_THREAD], ClientSendMessage, (void *)(uintptr_t)Client.socket);
+	THREAD_CREATE(threads[RECV_THREAD], ClientRecieveMessage, (void *)(uintptr_t)Client.socket);
 
 	for (int i = 0; i < THREAD_COUNT; i++)
 		THREAD_JOIN(threads[i]);
 
-	my_close(ConnectSocket);
-#ifdef _WIN32
-	WSACleanup();
-#endif
+	my_close(Client.socket);
+	WSA_CLEANUP();
 
 	return 0;
 }

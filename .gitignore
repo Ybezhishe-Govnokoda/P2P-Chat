@@ -1,19 +1,2 @@
-# Каталоги
-x64/
-.vs/
-P2P_chat/
-
-# Проектные файлы Visual Studio
-*.sln
-*.vcxproj
-*.vcxproj.filters
-*.vcxproj.user
-
-# Файлы после компиляции
-*.exe
-*.obj
-*.exp
-*.lib
-
-#Files with keys
-*.pem
+OpenSSL
+out

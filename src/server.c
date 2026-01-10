@@ -1,4 +1,4 @@
-﻿#include "server.h"
+#include "MySocket.h"
 
 // Global clients array and lock
 Client clients[MAX_CLIENTS];
@@ -6,24 +6,20 @@ int clientCount = 0;
 MUTEX_TYPE clientsLock;
 
 
-#ifdef _WIN32
-DWORD __stdcall ClientHandler(void *lpParam) {
-#else
-void __stdcall *ClientHandler(void *lpParam) {
-#endif
+ClientHandler() {
    my_socket_t clientSocket = (my_socket_t)(uintptr_t)lpParam;
-   char recvbuf[BUFFER_SIZE];
+   char recvbuf[SERVER_BUFFER_SIZE];
    int bytesReceived;
    char senderName[MAX_NAME_LEN] = "Unknown";
 
-   while ((bytesReceived = recv(clientSocket, recvbuf, BUFFER_SIZE, 0)
+   while ((bytesReceived = recv(clientSocket, recvbuf, SERVER_BUFFER_SIZE, 0)
 
       ) > 0)
    {
       // Handling [NAME], [GKEY], [GMSG]
       if (bytesReceived >= CODE_LENGTH && strncmp(recvbuf, "[NAME]", CODE_LENGTH) == 0) {
-         char tmp[BUFFER_SIZE + 1];
-         int copy_len = bytesReceived < BUFFER_SIZE ? bytesReceived : BUFFER_SIZE - 1;
+         char tmp[SERVER_BUFFER_SIZE + 1];
+         int copy_len = bytesReceived < SERVER_BUFFER_SIZE ? bytesReceived : SERVER_BUFFER_SIZE - 1;
          memcpy(tmp, recvbuf, copy_len);
          tmp[copy_len] = '\0';
 
@@ -71,11 +67,7 @@ void __stdcall *ClientHandler(void *lpParam) {
 
    my_close(clientSocket);
 
-#ifndef _WIN32
-   return NULL;
-#else
-   return 0;
-#endif
+	return R_NULL;
 }
 
 
@@ -84,13 +76,7 @@ int main(void) {
    struct addrinfo *result = NULL, hints;
    THREAD_TYPE threads[MAX_CLIENTS];
 
-#ifdef _WIN32
-   WSADATA wsaData;
-   if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-      printf("WSAStartup failed.\n");
-      return 1;
-   }
-#endif
+   INIT_WINSOCK();
 
    MUTEX_INIT(clientsLock);
 
@@ -102,9 +88,7 @@ int main(void) {
 
    if (getaddrinfo(NULL, DEFAULT_PORT, &hints, &result) != 0) {
       perror("getaddrinfo failed");
-#ifdef _WIN32
-      WSACleanup();
-#endif
+      WSA_CLEANUP();
       return 1;
    }
 
@@ -112,9 +96,7 @@ int main(void) {
    if (ServerSocket < 0) {
       perror("socket failed");
       freeaddrinfo(result);
-#ifdef _WIN32
-      WSACleanup();
-#endif
+      WSA_CLEANUP();
       return 1;
    }
 
@@ -125,9 +107,7 @@ int main(void) {
       perror("bind failed");
       freeaddrinfo(result);
       my_close(ServerSocket);
-#ifdef _WIN32
-      WSACleanup();
-#endif
+      WSA_CLEANUP();
       return 1;
    }
 
@@ -136,9 +116,7 @@ int main(void) {
    if (listen(ServerSocket, SOMAXCONN) < 0) {
       perror("listen failed");
       my_close(ServerSocket);
-#ifdef _WIN32
-      WSACleanup();
-#endif
+      WSA_CLEANUP();
       return 1;
    }
 
@@ -173,9 +151,7 @@ int main(void) {
       my_close(clients[i].socket);
    }
    my_close(ServerSocket);
-#ifdef _WIN32
-   WSACleanup();
-#endif
+   WSA_CLEANUP();
    MUTEX_DESTROY(clientsLock);
    return 0;
 }

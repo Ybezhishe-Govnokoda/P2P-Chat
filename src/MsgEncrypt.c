@@ -1,4 +1,4 @@
-#include "msg_encryption.h"
+#include "MsgEncrypt.h"
 
 
 unsigned char group_key[SENDER_KEY_LEN];
