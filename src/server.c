@@ -6,15 +6,14 @@ int clientCount = 0;
 MUTEX_TYPE clientsLock;
 
 
-ClientHandler() {
+// lpParam is a pointer
+ClientHandler(lpParam) {
    my_socket_t clientSocket = (my_socket_t)(uintptr_t)lpParam;
    char recvbuf[SERVER_BUFFER_SIZE];
    int bytesReceived;
    char senderName[MAX_NAME_LEN] = "Unknown";
 
-   while ((bytesReceived = recv(clientSocket, recvbuf, SERVER_BUFFER_SIZE, 0)
-
-      ) > 0)
+   while ((bytesReceived = recv(clientSocket, recvbuf, SERVER_BUFFER_SIZE, 0)) > 0)
    {
       // Handling [NAME], [GKEY], [GMSG]
       if (bytesReceived >= CODE_LENGTH && strncmp(recvbuf, "[NAME]", CODE_LENGTH) == 0) {

@@ -35,7 +35,8 @@ int send_group_key(SOCKET sock, const unsigned char *group_key) {
 
 
 // Client send thread
-ClientSendMessage() {
+// client is a pointer to Client struct
+ClientSendMessage(client) {
 	my_socket_t sock = client->socket;
 	char buffer[CLIENT_BUFFER_SIZE];
 
@@ -123,7 +124,9 @@ ClientSendMessage() {
 	return 0;
 }
 
-ClientRecieveMessage() {
+// Client receive thread
+// lpParam is a pointer to socket
+ClientRecieveMessage(lpParam) {
 	my_socket_t sock = (my_socket_t)lpParam;
 	char buf[CLIENT_BUFFER_SIZE];
 
@@ -215,28 +218,30 @@ ClientRecieveMessage() {
 }
 
 
-int main(int argc, char **argv)
+int main()
 {
 	Client client;
 	client.socket = -1;
 	struct addrinfo *result = NULL, *ptr = NULL, hints;
 	THREAD_TYPE threads[THREAD_COUNT];
+	char ip[IP_LENGTH];
 
 	INIT_WINSOCK();
 
 	EnableVTMode();
-
-	if (argc != 2) {
-		printf("usage: %s server-name\n", argv[0]);
-		return 1;
-	}
 
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = AF_INET;
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_protocol = IPPROTO_TCP;
 
-	if (getaddrinfo(argv[1], DEFAULT_PORT, &hints, &result) != 0) {
+	printf("Enter server IP address: ");
+	fgets(ip, sizeof(ip), stdin);
+
+	// Remove trailing newline
+	ip[strcspn(ip, "\r\n")] = '\0';
+
+	if (getaddrinfo(ip, DEFAULT_PORT, &hints, &result) != 0) {
 		perror("getaddrinfo failed");
 		WSA_CLEANUP();
 		return 1;
@@ -270,24 +275,14 @@ int main(int argc, char **argv)
 	printf("Local group key generated and sent\n");
 
 	printf("Enter name (16 characters max): ");
-	while (1) {
-		if (fgets(client.name, MAX_NAME_LEN, stdin)) {
-			size_t len = strlen(client.name);
-			if (len && client.name[len - 1] == '\n') client.name[len - 1] = '\0';
-
-			if (strlen(client.name) <= 16) {
-				char prefix[] = "[NAME]";
-				size_t len_prefix = strlen(prefix);
-				memmove(client.name + len_prefix, client.name, strlen(client.name) + 1);
-				memcpy(client.name, prefix, len_prefix);
-				break;
-			}
-			else printf("Name too long, try again:\n");
-		}
+	if (fgets(client.name, MAX_NAME_LEN, stdin)) {
+		size_t len = strlen(client.name);
+		if (len && client.name[len - 1] == '\n') client.name[len - 1] = '\0';
 	}
 
 	char name_msg[MAX_NAME_LEN + CODE_LENGTH + 1];
 	snprintf(name_msg, sizeof(name_msg), "[NAME]%s", client.name);
+
 	if (send(client.socket, name_msg, (int)strlen(name_msg), 0) < 0)
 		perror("send failed");
 

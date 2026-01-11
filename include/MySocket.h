@@ -82,10 +82,10 @@ typedef struct {
 } Client;
 
 #ifdef _WIN32
-#define ClientHandler() DWORD __stdcall ClientHandler(void *lpParam)
+#define ClientHandler(lpParam) DWORD __stdcall ClientHandler(void *lpParam)
 #define R_NULL 0 // For returning 0 in Windows and void* in Linux
 #else
-#define ClientHandler() void *ClientHandler(void *lpParam)
+#define ClientHandler(lpParam) void *ClientHandler(void *lpParam)
 #define R_NULL NULL
 #endif
 
@@ -135,6 +135,8 @@ typedef struct {
 #define IV_LEN 12
 #define TAG_LEN 16
 
+#define IP_LENGTH 15
+
 typedef enum {
    SUCCESS = 0,
    GENERATE_KEY_FAIL = -1,
@@ -143,13 +145,13 @@ typedef enum {
 } client_state;
 
 #ifdef _WIN32
-#define ClientSendMessage() DWORD __stdcall ClientSendMessage(Client *client)
+#define ClientSendMessage(client) DWORD __stdcall ClientSendMessage(Client *client)
 #else
-#define ClientSendMessage() void *ClientSendMessage(Client *client)
+#define ClientSendMessage(client) void *ClientSendMessage(Client *client)
 #endif
 
 #ifdef _WIN32
-#define ClientRecieveMessage() DWORD __stdcall ClientRecieveMessage(LPVOID lpParam)
+#define ClientRecieveMessage(lpParam) DWORD __stdcall ClientRecieveMessage(LPVOID lpParam)
 #else
-#define ClientRecieveMessage() void __stdcall *ClientRecieveMessage(void lpParam)
+#define ClientRecieveMessage(lpParam) void __stdcall *ClientRecieveMessage(void lpParam)
 #endif
