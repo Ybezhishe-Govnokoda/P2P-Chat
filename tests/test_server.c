@@ -5,6 +5,10 @@ Client clients[MAX_CLIENTS];
 int clientCount = 0;
 MUTEX_TYPE clientsLock;
 
+// Buffer with usernames to send to clients
+// string format: "[USNM]name1 name2 name3"
+char userNames[MAX_CLIENTS * MAX_NAME_LEN + MAX_CLIENTS - 1] = "[USNM]";
+
 
 // lpParam is a pointer
 ClientHandler(lpParam) {
@@ -25,7 +29,7 @@ ClientHandler(lpParam) {
          MUTEX_LOCK(clientsLock);
          for (int i = 0; i < clientCount; i++) {
             if (clients[i].socket == clientSocket) {
-               strncpy(clients[i].name, tmp + 6, MAX_NAME_LEN - 1);
+               strncpy(clients[i].name, tmp + CODE_LENGTH, MAX_NAME_LEN - 1);
                clients[i].name[MAX_NAME_LEN - 1] = '\0';
                strncpy(senderName, clients[i].name, MAX_NAME_LEN - 1);
                senderName[MAX_NAME_LEN - 1] = '\0';
@@ -33,7 +37,17 @@ ClientHandler(lpParam) {
                break;
             }
          }
+
+         snprintf(userNames, sizeof(userNames), "%s%s%s", 
+            userNames, senderName, " "
+         );
+			printf("Updated user names: %s\n", userNames);
          MUTEX_UNLOCK(clientsLock);
+
+         printf("Sending updated usernames to clients: %s\n", userNames);
+         if (send(clientSocket, userNames, (int)strlen(userNames), 0) < 0)
+            perror("sending usernames failed");
+
          continue;
       }
 

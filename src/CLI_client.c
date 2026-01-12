@@ -1,5 +1,7 @@
 #include "MySocket.h"
 #include "MsgEncrypt.h"
+#include "utils.h"
+#include "menu.h"
 
 // Generate sender key (Group Key)
 int generate_group_key(unsigned char *group_key_out) {
@@ -129,6 +131,8 @@ ClientSendMessage(client) {
 ClientRecieveMessage(lpParam) {
 	my_socket_t sock = (my_socket_t)lpParam;
 	char buf[CLIENT_BUFFER_SIZE];
+	char usernames[MAX_CLIENTS][MAX_NAME_LEN];
+	int user_count = 0;
 
 	while (1) {
 
@@ -139,6 +143,17 @@ ClientRecieveMessage(lpParam) {
 		}
 
 		buf[r] = '\0';
+
+		// Check for usernames message
+		if (strncmp(buf, "[USNM]", 6) == 0) {
+			parse_usernames(buf + 6, usernames, &user_count);
+			printf("Connected users: \n");
+			for (int i = 0; i < user_count; i++) {
+				printf("%s ", usernames[i]);
+			}
+			printf("\n");
+			continue;
+		}
 
 		// Check for group key
 		if (strncmp(buf, "[GKEY]", 6) == 0) {
@@ -217,7 +232,6 @@ ClientRecieveMessage(lpParam) {
 	return 0;
 }
 
-
 int main()
 {
 	Client client;
@@ -226,9 +240,21 @@ int main()
 	THREAD_TYPE threads[THREAD_COUNT];
 	char ip[IP_LENGTH];
 
-	INIT_WINSOCK();
-
+	// ==========
+	// START MENU
+	// ==========
 	EnableVTMode();
+	Set_UTF8_Encoding();
+
+	MenuButtons menu_button;
+
+	init_menu(&menu_button);
+	display_menu(&menu_button);
+	handle_menu_selection(&menu_button);
+
+	clear_screen();
+
+	INIT_WINSOCK();
 
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = AF_INET;
@@ -274,10 +300,19 @@ int main()
 	group_key_set = 1;
 	printf("Local group key generated and sent\n");
 
-	printf("Enter name (16 characters max): ");
-	if (fgets(client.name, MAX_NAME_LEN, stdin)) {
-		size_t len = strlen(client.name);
-		if (len && client.name[len - 1] == '\n') client.name[len - 1] = '\0';
+	while (1) {
+		printf("Enter name (16 characters max): ");
+		if (fgets(client.name, MAX_NAME_LEN, stdin)) {
+			size_t len = strlen(client.name);
+			if (len && client.name[len - 1] == '\n') client.name[len - 1] = '\0';
+
+			if (strchr(client.name, ' ')) {
+				printf("Invalid name: spaces are not allowed\n");
+				client.name[0] = '\0';
+				continue;
+			}
+			break;
+		}
 	}
 
 	char name_msg[MAX_NAME_LEN + CODE_LENGTH + 1];

@@ -1,5 +1,9 @@
-#include "MySocket.h"
+﻿#include "MySocket.h"
 #include "MsgEncrypt.h"
+#include "utils.h"
+#include "menu.h"
+
+#define DEBUG
 
 // Generate sender key (Group Key)
 int generate_group_key(unsigned char *group_key_out) {
@@ -129,6 +133,8 @@ ClientSendMessage(client) {
 ClientRecieveMessage(lpParam) {
 	my_socket_t sock = (my_socket_t)lpParam;
 	char buf[CLIENT_BUFFER_SIZE];
+	char usernames[MAX_CLIENTS][MAX_NAME_LEN];
+	int user_count = 0;
 
 	while (1) {
 
@@ -139,6 +145,17 @@ ClientRecieveMessage(lpParam) {
 		}
 
 		buf[r] = '\0';
+
+		// Check for usernames message
+		if (strncmp(buf, "[USNM]", 6) == 0) {
+			parse_usernames(buf + 6, usernames, &user_count);
+			printf("Connected users: \n");
+			for (int i = 0; i < user_count; i++) {
+				printf("%s ", usernames[i]);
+			}
+			printf("\n");
+			continue;
+		}
 
 		// Check for group key
 		if (strncmp(buf, "[GKEY]", 6) == 0) {
@@ -217,7 +234,6 @@ ClientRecieveMessage(lpParam) {
 	return 0;
 }
 
-
 int main()
 {
 	Client client;
@@ -226,20 +242,36 @@ int main()
 	THREAD_TYPE threads[THREAD_COUNT];
 	char ip[IP_LENGTH];
 
-	INIT_WINSOCK();
-
+	// ==========
+	// START MENU
+	// ==========
 	EnableVTMode();
+	Set_UTF8_Encoding();
+
+	MenuButtons menu_button;
+
+	init_menu(&menu_button);
+	display_menu(&menu_button);
+	handle_menu_selection(&menu_button);
+
+	clear_screen();
+
+	INIT_WINSOCK();
 
 	memset(&hints, 0, sizeof(hints));
 	hints.ai_family = AF_INET;
 	hints.ai_socktype = SOCK_STREAM;
 	hints.ai_protocol = IPPROTO_TCP;
 
+#ifndef DEBUG
 	printf("Enter server IP address: ");
 	fgets(ip, sizeof(ip), stdin);
 
 	// Remove trailing newline
 	ip[strcspn(ip, "\r\n")] = '\0';
+#else
+	strcpy(ip, "127.0.0.1");
+#endif // DEBUG
 
 	if (getaddrinfo(ip, DEFAULT_PORT, &hints, &result) != 0) {
 		perror("getaddrinfo failed");
@@ -251,11 +283,15 @@ int main()
 		client.socket = socket(ptr->ai_family, ptr->ai_socktype, ptr->ai_protocol);
 		if (client.socket < 0) continue;
 
+		printf("Connecting...");
 		if (connect(client.socket, ptr->ai_addr, (int)ptr->ai_addrlen) == 0) break;
 
 		my_close(client.socket);
 		client.socket = -1;
 	}
+
+	printf(" done.\n");
+	if (client.socket) printf("Connected to server %s:%s\n", ip, DEFAULT_PORT);
 
 	freeaddrinfo(result);
 
@@ -274,10 +310,19 @@ int main()
 	group_key_set = 1;
 	printf("Local group key generated and sent\n");
 
-	printf("Enter name (16 characters max): ");
-	if (fgets(client.name, MAX_NAME_LEN, stdin)) {
-		size_t len = strlen(client.name);
-		if (len && client.name[len - 1] == '\n') client.name[len - 1] = '\0';
+	while (1) {
+		printf("Enter name (16 characters max): ");
+		if (fgets(client.name, MAX_NAME_LEN, stdin)) {
+			size_t len = strlen(client.name);
+			if (len && client.name[len - 1] == '\n') client.name[len - 1] = '\0';
+
+			if (strchr(client.name, ' ')) {
+				printf("Invalid name: spaces are not allowed\n");
+				client.name[0] = '\0';
+				continue;
+			}
+			break;
+		}
 	}
 
 	char name_msg[MAX_NAME_LEN + CODE_LENGTH + 1];
